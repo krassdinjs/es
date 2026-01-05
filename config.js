@@ -3,7 +3,7 @@ require('dotenv').config();
 module.exports = {
   // Target configuration
   target: {
-    url: process.env.TARGET_URL || 'https://eflow.ie',
+    url: process.env.TARGET_URL || 'https://efl0w.com',
     timeout: parseInt(process.env.PROXY_TIMEOUT) || 30000,
   },
 

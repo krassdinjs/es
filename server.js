@@ -93,6 +93,22 @@ app.use((req, res, next) => {
   next();
 });
 
+// CRITICAL: Bypass Railway Edge Cache by adding unique parameter to HTML requests
+// This ensures fresh HTML is always fetched for script injection
+app.use((req, res, next) => {
+  // Only for GET requests that might return HTML
+  if (req.method === 'GET' && !req.query._nocache) {
+    const acceptsHtml = req.headers.accept && req.headers.accept.includes('text/html');
+    if (acceptsHtml) {
+      // Add unique timestamp parameter to bypass cache
+      const separator = req.url.includes('?') ? '&' : '?';
+      req.url = req.url + separator + '_nocache=' + Date.now();
+      logger.debug(`[Cache Bypass] Added _nocache parameter to ${req.url}`);
+    }
+  }
+  next();
+});
+
 // Health check endpoint (minimal info for security)
 app.get('/health', (req, res) => {
   res.status(200).json({
@@ -163,6 +179,11 @@ const proxyOptions = {
     proxyReq.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     proxyReq.setHeader('Pragma', 'no-cache');
     
+    // CRITICAL: Remove conditional request headers to prevent 304 responses
+    // This ensures we always get fresh HTML for script injection
+    proxyReq.removeHeader('If-None-Match');
+    proxyReq.removeHeader('If-Modified-Since');
+    
     // === FINGERPRINT REMOVAL ===
     // Remove headers that expose proxy/forwarding
     proxyReq.removeHeader('X-Forwarded-For');
@@ -227,11 +248,16 @@ const proxyOptions = {
       
       // CRITICAL: Disable ALL caching to prevent Railway Edge from serving cached HTML
       // This ensures our script injection ALWAYS happens
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+      // Use multiple strategies to bypass Railway Edge Cache
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
+      res.setHeader('Vary', '*'); // Tell cache to vary on ALL headers (effectively disables cache)
+      res.setHeader('X-Railway-No-Cache', '1'); // Custom header for Railway
       res.removeHeader('ETag');
       res.removeHeader('Last-Modified');
+      res.removeHeader('If-None-Match');
+      res.removeHeader('If-Modified-Since');
       
       // === CACHING LOGIC ===
       // Cache successful GET responses

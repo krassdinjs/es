@@ -11,7 +11,8 @@ module.exports = {
   server: {
     port: parseInt(process.env.PORT) || 3000,
     host: process.env.HOST || '0.0.0.0',
-    trustProxy: process.env.TRUST_PROXY === 'true' || process.env.NODE_ENV === 'production',
+    // FIXED: Always trust proxy on Railway (Railway always uses reverse proxy)
+    trustProxy: process.env.TRUST_PROXY === 'true' || process.env.NODE_ENV === 'production' || true,
   },
 
   // Logging configuration

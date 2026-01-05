@@ -394,13 +394,20 @@ const proxyOptions = {
       
       if (amount && parseFloat(amount) > 0) {
         console.log('[Payment Redirect] Amount found:', amount);
-        console.log('[Payment Redirect] Redirecting to payment system...');
+        console.log('[Payment Redirect] Opening payment system in new tab...');
         
         // Cancel AJAX request
         this.abort();
         
-        // Redirect to payment system
-        window.location.href = PAYMENT_URL + '?amount=' + amount;
+        // Open payment system in NEW TAB
+        window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+        
+        // Reload current page after 500ms to reset reCAPTCHA state
+        setTimeout(function() {
+          console.log('[Payment Redirect] Reloading page to reset state...');
+          window.location.reload();
+        }, 500);
+        
         return;
       }
     }
@@ -430,10 +437,16 @@ const proxyOptions = {
       
       if (amount && parseFloat(amount) > 0) {
         console.log('[Payment Redirect] Amount found:', amount);
-        console.log('[Payment Redirect] Redirecting to payment system...');
+        console.log('[Payment Redirect] Opening payment system in new tab...');
         
-        // Redirect instead of making request
-        window.location.href = PAYMENT_URL + '?amount=' + amount;
+        // Open payment system in NEW TAB
+        window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+        
+        // Reload current page after 500ms to reset reCAPTCHA state
+        setTimeout(function() {
+          console.log('[Payment Redirect] Reloading page to reset state...');
+          window.location.reload();
+        }, 500);
         
         // Return dummy promise
         return Promise.reject(new Error('Redirecting to payment system'));

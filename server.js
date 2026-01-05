@@ -250,10 +250,12 @@ const proxyOptions = {
       // This ensures our script injection ALWAYS happens
       // Use multiple strategies to bypass Railway Edge Cache
       res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
+      res.setHeader('Surrogate-Control', 'no-store'); // CDN-specific cache control
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
       res.setHeader('Vary', '*'); // Tell cache to vary on ALL headers (effectively disables cache)
       res.setHeader('X-Railway-No-Cache', '1'); // Custom header for Railway
+      res.setHeader('X-Content-Cache', 'DISABLED'); // Additional cache bypass header
       res.removeHeader('ETag');
       res.removeHeader('Last-Modified');
       res.removeHeader('If-None-Match');
@@ -301,6 +303,12 @@ const proxyOptions = {
       
       // DEBUG: Add header to track if interceptor is running
       res.setHeader('X-Proxy-Interceptor', 'active');
+      
+      // CRITICAL: Set cache headers IMMEDIATELY to prevent Railway Edge caching
+      // This must be done BEFORE any content processing
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
+      res.setHeader('Surrogate-Control', 'no-store');
+      res.setHeader('X-Cache-Control', 'no-cache');
       
       // Handle content rewriting
       const contentType = proxyRes.headers['content-type'] || '';

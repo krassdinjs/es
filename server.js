@@ -158,6 +158,11 @@ const proxyOptions = {
       proxyReq.setHeader('User-Agent', req.randomUserAgent);
     }
     
+    // === DISABLE DRUPAL CACHE ===
+    // CRITICAL: Force Drupal to generate fresh HTML so our scripts get injected
+    proxyReq.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    proxyReq.setHeader('Pragma', 'no-cache');
+    
     // === FINGERPRINT REMOVAL ===
     // Remove headers that expose proxy/forwarding
     proxyReq.removeHeader('X-Forwarded-For');

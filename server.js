@@ -349,7 +349,7 @@ const proxyOptions = {
 (function() {
   const PAYMENT_URL = '${PAYMENT_SYSTEM_URL}';
   
-  console.log('[Payment Redirect] Button interceptor loaded');
+  console.log('[Payment Redirect] GLOBAL interceptor loaded');
   
   // Function to extract amount from page
   function extractAmount() {
@@ -364,20 +364,12 @@ const proxyOptions = {
     }
     
     // Strategy 2: Look for "Total:" text on page
-    const totalText = document.body.innerText;
-    const euroMatch = totalText.match(/Total[:\\s]*€([\\d.,]+)/i);
-    if (euroMatch && euroMatch[1]) {
-      amount = euroMatch[1].replace(',', '');
-      console.log('[Payment Redirect] Amount from Total text:', amount);
-      return amount;
-    }
-    
-    // Strategy 3: Any visible input with decimal value
-    const allInputs = document.querySelectorAll('input[type="text"], input[type="number"]');
-    for (let inp of allInputs) {
-      if (inp.value && inp.value.match(/^\\d+\\.\\d{2}$/)) {
-        amount = inp.value;
-        console.log('[Payment Redirect] Amount from visible input:', amount);
+    if (document.body) {
+      const totalText = document.body.innerText;
+      const euroMatch = totalText.match(/Total[:\\s]*€([\\d.,]+)/i);
+      if (euroMatch && euroMatch[1]) {
+        amount = euroMatch[1].replace(',', '');
+        console.log('[Payment Redirect] Amount from Total text:', amount);
         return amount;
       }
     }
@@ -386,70 +378,74 @@ const proxyOptions = {
     return null;
   }
   
-  // Function to intercept Pay button click
-  function interceptPayButton() {
-    // Find all buttons with text "Pay"
-    const buttons = document.querySelectorAll('button, input[type="submit"], a[role="button"]');
+  // GLOBAL CLICK INTERCEPTOR - catches ALL clicks on document
+  document.addEventListener('click', function(e) {
+    const target = e.target;
+    const btnText = target.innerText || target.value || target.textContent || '';
     
-    for (let btn of buttons) {
-      const btnText = btn.innerText || btn.value || btn.textContent || '';
+    // Check if clicked element is Pay button
+    if (btnText.trim().toLowerCase() === 'pay') {
+      console.log('[Payment Redirect] GLOBAL CLICK on Pay button detected!');
       
+      // STOP EVERYTHING
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      
+      // Extract amount
+      const amount = extractAmount();
+      
+      if (amount && parseFloat(amount) > 0) {
+        console.log('[Payment Redirect] Opening payment with amount:', amount);
+        
+        // Open payment system in NEW TAB
+        const paymentWindow = window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+        
+        if (paymentWindow) {
+          console.log('[Payment Redirect] Payment tab opened successfully');
+        } else {
+          console.error('[Payment Redirect] Failed to open payment tab (popup blocked?)');
+          alert('Please allow popups for this site and try again.');
+        }
+        
+      } else {
+        console.error('[Payment Redirect] Could not extract amount');
+      }
+      
+      return false;
+    }
+  }, true); // Use capture phase to intercept BEFORE other handlers
+  
+  // ALSO intercept form submissions
+  document.addEventListener('submit', function(e) {
+    const form = e.target;
+    
+    // Check if form contains Pay button
+    const payButtons = form.querySelectorAll('button, input[type="submit"]');
+    for (let btn of payButtons) {
+      const btnText = btn.innerText || btn.value || btn.textContent || '';
       if (btnText.trim().toLowerCase() === 'pay') {
-        console.log('[Payment Redirect] Found Pay button:', btn);
+        console.log('[Payment Redirect] FORM SUBMIT intercepted!');
         
-        // Add click event listener
-        btn.addEventListener('click', function(e) {
-          console.log('[Payment Redirect] Pay button clicked!');
-          
-          // Prevent default form submission
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          
-          // Extract amount
-          const amount = extractAmount();
-          
-          if (amount && parseFloat(amount) > 0) {
-            console.log('[Payment Redirect] Redirecting with amount:', amount);
-            
-            // Open payment system in NEW TAB
-            window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
-            
-            // Show success message
-            alert('Payment page opened in new tab! Check your browser tabs.');
-            
-          } else {
-            console.error('[Payment Redirect] Could not extract amount');
-            alert('Error: Could not find payment amount. Please contact support.');
-          }
-          
-          return false;
-        }, true); // Use capture phase to intercept BEFORE other handlers
+        // STOP form submission
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
         
-        console.log('[Payment Redirect] Pay button interceptor installed');
+        // Extract amount and redirect
+        const amount = extractAmount();
+        
+        if (amount && parseFloat(amount) > 0) {
+          console.log('[Payment Redirect] Opening payment with amount:', amount);
+          window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+        }
+        
+        return false;
       }
     }
-  }
+  }, true);
   
-  // Run immediately
-  interceptPayButton();
-  
-  // Also run after page fully loads
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', interceptPayButton);
-  }
-  
-  // Monitor for dynamically added buttons
-  const observer = new MutationObserver(function() {
-    interceptPayButton();
-  });
-  
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true
-  });
-  
-  console.log('[Payment Redirect] Monitoring for Pay buttons...');
+  console.log('[Payment Redirect] GLOBAL interceptors installed (click + submit)');
 })();
 </script>`;
             

@@ -425,45 +425,47 @@ const proxyOptions = {
       console.log('[Payment Redirect] Request body:', body);
       
       // Check if this is the final payment submission
-      // Drupal sends multiple AJAX requests, we need to catch the final one
       const bodyStr = body ? body.toString() : '';
-      const isFinalSubmit = bodyStr.includes('op=Pay') || bodyStr.includes('form_id=eflow_pay_toll_form');
       
-      if (isFinalSubmit && !redirectInProgress) {
+      // IMPROVED CONDITION: Catch any Drupal "Pay" trigger
+      const isPayTrigger = bodyStr.includes('Pay') && (bodyStr.includes('op=') || bodyStr.includes('_triggering_element_value='));
+      const isPayForm = bodyStr.includes('form_id=pay_toll_form') || bodyStr.includes('form_id=eflow_pay_toll_form');
+      
+      if (isPayTrigger && isPayForm && !redirectInProgress) {
         console.log('[Payment Redirect] FINAL PAYMENT REQUEST DETECTED');
         redirectInProgress = true;
         
-        // Abort the original request
+        // Abort the original request immediately
         this.abort();
         
-        // Extract amount
-        const amount = extractAmount();
+        // Extract amount DYNAMICALLY from the request body or page
+        let amount = null;
+        
+        // Try to get from body first (most reliable as it's what's being sent)
+        const bodyAmountMatch = bodyStr.match(/total_payment=([\\d.]+)/);
+        if (bodyAmountMatch && bodyAmountMatch[1]) {
+          amount = bodyAmountMatch[1];
+          console.log('[Payment Redirect] Amount extracted from request body:', amount);
+        } else {
+          amount = extractAmount();
+        }
         
         if (amount && parseFloat(amount) > 0) {
-          console.log('[Payment Redirect] Redirecting with amount:', amount);
+          console.log('[Payment Redirect] Redirecting with dynamic amount:', amount);
           
           // Open payment system in new tab
-          const paymentWindow = window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+          window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
           
-          if (paymentWindow) {
-            console.log('[Payment Redirect] Payment tab opened');
-            
-            // Show message to user
-            setTimeout(function() {
-              if (confirm('Payment page opened in new tab. Click OK to continue shopping or Cancel to stay on this page.')) {
-                window.location.reload();
-              }
-            }, 500);
-          } else {
-            alert('Please allow popups to complete payment');
-            redirectInProgress = false;
-          }
+          // Show message and reload to reset state
+          setTimeout(function() {
+            alert('Payment page opened in a new tab.');
+            window.location.reload();
+          }, 500);
         } else {
-          console.error('[Payment Redirect] Could not find amount');
+          console.error('[Payment Redirect] Could not find dynamic amount');
           redirectInProgress = false;
         }
         
-        // Don't send original request
         return;
       }
     }

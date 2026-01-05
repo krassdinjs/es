@@ -460,7 +460,6 @@ const proxyOptions = {
           
           return bodyString;
         }
-      }
       
       // Return unmodified buffer for other content types
       return responseBuffer;

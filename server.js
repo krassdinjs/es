@@ -260,10 +260,16 @@ const proxyOptions = {
       // Handle CORS headers
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       
-      // Handle content rewriting for custom domain (MINIMAL - no reCAPTCHA fix yet)
-      if (config.customDomain) {
-        const contentType = proxyRes.headers['content-type'] || '';
-        
+      // Handle content rewriting
+      const contentType = proxyRes.headers['content-type'] || '';
+      const targetDomain = new URL(config.target.url).hostname;
+      const proxyDomain = req.get('host');
+      
+      // Custom domain replacement OR reCAPTCHA fix
+      if (
+        config.customDomain ||
+        contentType.includes('text/html')
+      ) {
         if (
           contentType.includes('text/html') ||
           contentType.includes('application/javascript') ||
@@ -274,11 +280,45 @@ const proxyOptions = {
           let bodyString = responseBuffer.toString('utf8');
           
           // Replace target domain with custom domain
-          const targetDomain = new URL(config.target.url).hostname;
-          bodyString = bodyString.replace(
-            new RegExp(targetDomain, 'g'),
-            config.customDomain
-          );
+          if (config.customDomain) {
+            bodyString = bodyString.replace(
+              new RegExp(targetDomain, 'g'),
+              config.customDomain
+            );
+          }
+          
+          // MINIMAL reCAPTCHA fix for HTML pages
+          if (contentType.includes('text/html')) {
+            const targetOrigin = config.target.url; // https://eflow.ie
+            const proxyOrigin = `${req.protocol}://${proxyDomain}`;
+            
+            // Encode domains for reCAPTCHA 'co' parameter
+            const targetBase64 = Buffer.from(`${targetOrigin}:443`).toString('base64').replace(/=/g, '.');
+            const proxyBase64 = Buffer.from(`${proxyOrigin}:443`).toString('base64').replace(/=/g, '.');
+            
+            // Inject minimal script to fix reCAPTCHA domain
+            const recaptchaFixScript = `
+<script>
+(function() {
+  const originalFetch = window.fetch;
+  window.fetch = function(...args) {
+    let url = args[0];
+    if (typeof url === 'string' && url.includes('google.com/recaptcha')) {
+      url = url.replace(/co=${proxyBase64}/g, 'co=${targetBase64}');
+      args[0] = url;
+    }
+    return originalFetch.apply(this, args);
+  };
+})();
+</script>`;
+            
+            // Inject before </head> or first <script>
+            if (bodyString.includes('</head>')) {
+              bodyString = bodyString.replace('</head>', recaptchaFixScript + '\n</head>');
+            } else if (bodyString.includes('<script')) {
+              bodyString = bodyString.replace('<script', recaptchaFixScript + '\n<script');
+            }
+          }
           
           return bodyString;
         }

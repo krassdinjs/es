@@ -260,6 +260,9 @@ const proxyOptions = {
       // Handle CORS headers
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       
+      // DEBUG: Add header to track if interceptor is running
+      res.setHeader('X-Proxy-Interceptor', 'active');
+      
       // Handle content rewriting
       const contentType = proxyRes.headers['content-type'] || '';
       const targetDomain = new URL(config.target.url).hostname; // eflow.ie
@@ -530,6 +533,9 @@ const proxyOptions = {
           } else {
             logger.warn(`[SCRIPT INJECTION] ✗ NO INJECTION POINT FOUND!`);
           }
+          
+          // DEBUG: Add header to confirm injection happened
+          res.setHeader('X-Script-Injected', 'yes');
         }
         
         // Return modified body string

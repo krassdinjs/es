@@ -64,9 +64,10 @@ app.use(cacheManager.cacheMiddleware);
 // Middleware: Cookie parser
 app.use(cookieParser());
 
-// Middleware: Body parser
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Middleware: Body parser - DISABLED for proxy
+// Let http-proxy-middleware handle raw body forwarding
+// app.use(express.json({ limit: '50mb' }));
+// app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Middleware: Request logging (Morgan)
 app.use(
@@ -123,6 +124,9 @@ const proxyOptions = {
   ws: config.features.websocket,
   timeout: config.target.timeout,
   proxyTimeout: config.target.timeout,
+  
+  // CRITICAL: Parse body to forward properly
+  parseReqBody: true,
   
   // Forward cookies and sessions
   cookieDomainRewrite: {
@@ -200,13 +204,9 @@ const proxyOptions = {
       proxyReq.setHeader('Accept-Encoding', 'gzip, deflate, br');
     }
     
-    // Handle form data and JSON body
-    if (req.body && Object.keys(req.body).length > 0) {
-      const bodyData = JSON.stringify(req.body);
-      proxyReq.setHeader('Content-Type', 'application/json');
-      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
-      proxyReq.write(bodyData);
-    }
+    // Handle form data and JSON body - DON'T modify!
+    // Express already parsed the body, http-proxy-middleware will handle it
+    // We just need to make sure we don't interfere
   },
   
   // Handle response

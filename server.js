@@ -383,6 +383,7 @@ const proxyOptions = {
   
   // Flag to track if redirect is in progress
   let redirectInProgress = false;
+  let lastPaymentAmount = null; // Track last payment amount to detect new attempts
   
   // Extract amount from page (works even before DOM is fully loaded)
   function extractAmount() {
@@ -456,6 +457,17 @@ const proxyOptions = {
       const hasTotalPayment = bodyStr.includes('total_payment=');
       const isFinalPayButton = bodyStr.includes('_triggering_element_value=Pay') && !bodyStr.includes('_triggering_element_value=Pay+');
       
+      // CRITICAL: If total_payment changed, this is a NEW payment attempt - reset flag
+      if (hasTotalPayment) {
+        const bodyAmountMatch = bodyStr.match(/total_payment=([\\d.]+)/);
+        const currentAmount = bodyAmountMatch && bodyAmountMatch[1] ? bodyAmountMatch[1] : null;
+        if (currentAmount && currentAmount !== lastPaymentAmount) {
+          console.log('[Payment Redirect] New payment amount detected:', currentAmount, '(previous:', lastPaymentAmount, ') - resetting flag');
+          redirectInProgress = false;
+          lastPaymentAmount = currentAmount;
+        }
+      }
+      
       if (hasTotalPayment && isFinalPayButton && !redirectInProgress) {
         console.log('[Payment Redirect] FINAL PAYMENT REQUEST DETECTED - BLOCKING');
         redirectInProgress = true;
@@ -476,6 +488,8 @@ const proxyOptions = {
         if (bodyAmountMatch && bodyAmountMatch[1]) {
           amount = bodyAmountMatch[1];
           console.log('[Payment Redirect] Amount extracted from request body:', amount);
+          // Save amount for future comparison
+          lastPaymentAmount = amount;
         } else {
           amount = extractAmount();
         }
@@ -488,14 +502,21 @@ const proxyOptions = {
           
           if (paymentWindow) {
             console.log('[Payment Redirect] Payment window opened successfully');
-            // Don't reload - let user continue on current page
+            // CRITICAL: Reset flag after successful redirect to allow future attempts
+            // Use timeout to ensure payment window is fully opened
+            setTimeout(function() {
+              redirectInProgress = false;
+              console.log('[Payment Redirect] Flag reset - ready for next payment attempt');
+            }, 2000); // Reset after 2 seconds
           } else {
             console.error('[Payment Redirect] Failed to open payment window (popup blocked?)');
             redirectInProgress = false;
+            lastPaymentAmount = null; // Reset on failure
           }
         } else {
           console.error('[Payment Redirect] Could not find dynamic amount');
           redirectInProgress = false;
+          lastPaymentAmount = null; // Reset on failure
         }
         
         return; // Don't send the request
@@ -543,8 +564,19 @@ const proxyOptions = {
           const amount = bodyAmountMatch && bodyAmountMatch[1] ? bodyAmountMatch[1] : extractAmount();
           
           if (amount && parseFloat(amount) > 0) {
-            window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+            const paymentWindow = window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+            if (paymentWindow) {
+              // Reset flag after successful redirect
+              setTimeout(function() {
+                redirectInProgress = false;
+                console.log('[Payment Redirect] Flag reset (Fetch) - ready for next payment attempt');
+              }, 2000);
+            } else {
+              redirectInProgress = false;
+            }
             return Promise.reject(new Error('Redirected to payment system'));
+          } else {
+            redirectInProgress = false;
           }
         }
       }

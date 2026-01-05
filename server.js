@@ -5,8 +5,11 @@ const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const compression = require('compression');
 const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
 const config = require('./config');
 const logger = require('./logger');
+const { userAgentRotation, getRandomUserAgent } = require('./user-agents');
+const cacheManager = require('./cache-manager');
 
 // Create Express app
 const app = express();
@@ -35,6 +38,27 @@ app.use(
 if (config.features.compression) {
   app.use(compression());
 }
+
+// Middleware: Rate Limiting (look like normal user)
+const limiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute window
+  max: 60, // Max 60 requests per minute per IP
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: 'Too many requests, please slow down',
+  skip: (req) => {
+    // Skip rate limiting for static resources
+    return req.url.match(/\.(css|js|jpg|jpeg|png|gif|svg|ico|woff|woff2|ttf|eot)$/);
+  },
+});
+
+app.use(limiter);
+
+// Middleware: User-Agent rotation
+app.use(userAgentRotation);
+
+// Middleware: Cache check
+app.use(cacheManager.cacheMiddleware);
 
 // Middleware: Cookie parser
 app.use(cookieParser());
@@ -68,12 +92,28 @@ app.use((req, res, next) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  const cacheStats = cacheManager.getStats();
   res.json({
     status: 'ok',
     target: config.target.url,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
+    cache: {
+      keys: cacheStats.keys,
+      hitRate: (cacheStats.hitRate * 100).toFixed(2) + '%',
+    },
   });
+});
+
+// Cache stats endpoint (for debugging)
+app.get('/cache-stats', (req, res) => {
+  res.json(cacheManager.getStats());
+});
+
+// Clear cache endpoint (for debugging)
+app.post('/clear-cache', (req, res) => {
+  cacheManager.clear();
+  res.json({ message: 'Cache cleared' });
 });
 
 // Proxy configuration
@@ -104,10 +144,27 @@ const proxyOptions = {
     // Log proxy request
     logger.debug(`Proxying ${req.method} ${req.url} to ${config.target.url}`);
     
-    // Set original host
-    proxyReq.setHeader('X-Forwarded-Host', req.headers.host);
-    proxyReq.setHeader('X-Forwarded-Proto', req.protocol);
-    proxyReq.setHeader('X-Real-IP', req.ip);
+    // === USER-AGENT ROTATION ===
+    // Use random User-Agent to look like different browsers
+    if (req.randomUserAgent) {
+      proxyReq.setHeader('User-Agent', req.randomUserAgent);
+    }
+    
+    // === FINGERPRINT REMOVAL ===
+    // Remove headers that expose proxy/forwarding
+    proxyReq.removeHeader('X-Forwarded-For');
+    proxyReq.removeHeader('X-Forwarded-Host');
+    proxyReq.removeHeader('X-Forwarded-Proto');
+    proxyReq.removeHeader('X-Real-IP');
+    proxyReq.removeHeader('Via');
+    proxyReq.removeHeader('Forwarded');
+    
+    // Remove rate limit headers
+    proxyReq.removeHeader('RateLimit');
+    proxyReq.removeHeader('RateLimit-Policy');
+    proxyReq.removeHeader('RateLimit-Limit');
+    proxyReq.removeHeader('RateLimit-Remaining');
+    proxyReq.removeHeader('RateLimit-Reset');
     
     // Forward cookies properly
     if (req.headers.cookie) {
@@ -132,6 +189,17 @@ const proxyOptions = {
       }
     });
     
+    // Set realistic Accept headers
+    if (!proxyReq.getHeader('Accept')) {
+      proxyReq.setHeader('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8');
+    }
+    if (!proxyReq.getHeader('Accept-Language')) {
+      proxyReq.setHeader('Accept-Language', 'en-US,en;q=0.9');
+    }
+    if (!proxyReq.getHeader('Accept-Encoding')) {
+      proxyReq.setHeader('Accept-Encoding', 'gzip, deflate, br');
+    }
+    
     // Handle form data and JSON body
     if (req.body && Object.keys(req.body).length > 0) {
       const bodyData = JSON.stringify(req.body);
@@ -145,6 +213,30 @@ const proxyOptions = {
   onProxyRes: (proxyRes, req, res) => {
     // Log proxy response
     logger.debug(`Received response ${proxyRes.statusCode} for ${req.url}`);
+    
+    // === CACHING LOGIC ===
+    // Cache successful GET responses
+    if (cacheManager.shouldCache(req, { statusCode: proxyRes.statusCode })) {
+      let body = [];
+      
+      proxyRes.on('data', (chunk) => {
+        body.push(chunk);
+      });
+      
+      proxyRes.on('end', () => {
+        const fullBody = Buffer.concat(body);
+        const contentType = proxyRes.headers['content-type'];
+        
+        // Store in cache
+        cacheManager.set(req, {
+          body: fullBody,
+          contentType: contentType,
+          statusCode: proxyRes.statusCode,
+        });
+        
+        logger.debug(`Cached response for ${req.url}`);
+      });
+    }
     
     // Handle cookies - rewrite domain if custom domain is set
     if (proxyRes.headers['set-cookie']) {

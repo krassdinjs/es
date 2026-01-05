@@ -42,12 +42,13 @@ if (config.features.compression) {
 // Middleware: Rate Limiting (look like normal user)
 const limiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute window
-  max: 60, // Max 60 requests per minute per IP
+  max: process.env.NODE_ENV === 'production' ? 30 : 60, // Lower in production
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: 'Too many requests, please slow down',
   skip: (req) => {
-    // Skip rate limiting for static resources
+    // Skip rate limiting for static resources and health checks
+    if (req.url === '/health' || req.url === '/cache-stats') return true;
     return req.url.match(/\.(css|js|jpg|jpeg|png|gif|svg|ico|woff|woff2|ttf|eot)$/);
   },
 });
@@ -90,28 +91,27 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check endpoint
+// Health check endpoint (minimal info for security)
 app.get('/health', (req, res) => {
-  const cacheStats = cacheManager.getStats();
-  res.json({
-    status: 'ok',
-    target: config.target.url,
-    uptime: process.uptime(),
+  res.status(200).json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
-    cache: {
-      keys: cacheStats.keys,
-      hitRate: (cacheStats.hitRate * 100).toFixed(2) + '%',
-    },
   });
 });
 
-// Cache stats endpoint (for debugging)
+// Cache stats endpoint (protected, only in dev)
 app.get('/cache-stats', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).send('Not Found');
+  }
   res.json(cacheManager.getStats());
 });
 
-// Clear cache endpoint (for debugging)
+// Clear cache endpoint (protected, only in dev)
 app.post('/clear-cache', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).send('Not Found');
+  }
   cacheManager.clear();
   res.json({ message: 'Cache cleared' });
 });

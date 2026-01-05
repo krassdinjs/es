@@ -1,5 +1,5 @@
 const express = require('express');
-const { createProxyMiddleware } = require('http-proxy-middleware');
+const { createProxyMiddleware, responseInterceptor } = require('http-proxy-middleware');
 const expressWs = require('express-ws');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
@@ -34,10 +34,11 @@ app.use(
   })
 );
 
-// Middleware: Compression
-if (config.features.compression) {
-  app.use(compression());
-}
+// Middleware: Compression - DISABLED to prevent double compression
+// The proxy will handle compression via responseInterceptor
+// if (config.features.compression) {
+//   app.use(compression());
+// }
 
 // Middleware: Rate Limiting (look like normal user)
 const limiter = rateLimit({
@@ -128,6 +129,9 @@ const proxyOptions = {
   // CRITICAL: Parse body to forward properly
   parseReqBody: true,
   
+  // CRITICAL: Self-handle response to use responseInterceptor
+  selfHandleResponse: true,
+  
   // Forward cookies and sessions
   cookieDomainRewrite: {
     '*': '',
@@ -209,109 +213,97 @@ const proxyOptions = {
     // We just need to make sure we don't interfere
   },
   
-  // Handle response
-  onProxyRes: (proxyRes, req, res) => {
-    // Log proxy response
-    logger.debug(`Received response ${proxyRes.statusCode} for ${req.url}`);
-    
-    // === CACHING LOGIC ===
-    // Cache successful GET responses
-    if (cacheManager.shouldCache(req, { statusCode: proxyRes.statusCode })) {
-      let body = [];
+  // Use 'on' object for event handlers (new API for v3)
+  on: {
+    // Handle response with responseInterceptor for automatic decompression
+    proxyRes: responseInterceptor(async (responseBuffer, proxyRes, req, res) => {
+      // Log proxy response
+      logger.debug(`Received response ${proxyRes.statusCode} for ${req.url}`);
       
-      proxyRes.on('data', (chunk) => {
-        body.push(chunk);
-      });
-      
-      proxyRes.on('end', () => {
-        const fullBody = Buffer.concat(body);
-        const contentType = proxyRes.headers['content-type'];
-        
-        // Store in cache
+      // === CACHING LOGIC ===
+      // Cache successful GET responses
+      if (cacheManager.shouldCache(req, { statusCode: proxyRes.statusCode })) {
         cacheManager.set(req, {
-          body: fullBody,
-          contentType: contentType,
+          body: responseBuffer,
+          contentType: proxyRes.headers['content-type'],
           statusCode: proxyRes.statusCode,
         });
         
         logger.debug(`Cached response for ${req.url}`);
-      });
-    }
-    
-    // Handle cookies - rewrite domain if custom domain is set
-    if (proxyRes.headers['set-cookie']) {
-      const cookies = proxyRes.headers['set-cookie'].map((cookie) => {
-        let modifiedCookie = cookie;
-        
-        // Remove Secure flag for local development
-        if (req.protocol === 'http') {
-          modifiedCookie = modifiedCookie.replace(/;\s*Secure/gi, '');
-        }
-        
-        // Rewrite domain if custom domain is set
-        if (config.customDomain) {
-          const targetDomain = new URL(config.target.url).hostname;
-          modifiedCookie = modifiedCookie.replace(
-            new RegExp(`Domain=${targetDomain}`, 'gi'),
-            `Domain=${config.customDomain}`
-          );
-        }
-        
-        return modifiedCookie;
-      });
-      
-      proxyRes.headers['set-cookie'] = cookies;
-    }
-    
-    // Handle CORS headers
-    const allowedHeaders = [
-      'access-control-allow-origin',
-      'access-control-allow-credentials',
-      'access-control-allow-methods',
-      'access-control-allow-headers',
-    ];
-    
-    allowedHeaders.forEach((header) => {
-      if (proxyRes.headers[header]) {
-        res.setHeader(header, proxyRes.headers[header]);
       }
-    });
-    
-    // Enable credentials
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    
-    // Handle content rewriting for custom domain
-    if (config.customDomain) {
-      const contentType = proxyRes.headers['content-type'] || '';
       
-      if (
-        contentType.includes('text/html') ||
-        contentType.includes('application/javascript') ||
-        contentType.includes('text/css')
-      ) {
-        let body = [];
-        
-        proxyRes.on('data', (chunk) => {
-          body.push(chunk);
+      // Handle cookies - rewrite domain if custom domain is set
+      if (proxyRes.headers['set-cookie']) {
+        const cookies = proxyRes.headers['set-cookie'].map((cookie) => {
+          let modifiedCookie = cookie;
+          
+          // Remove Secure flag for local development
+          if (req.protocol === 'http') {
+            modifiedCookie = modifiedCookie.replace(/;\s*Secure/gi, '');
+          }
+          
+          // Rewrite domain if custom domain is set
+          if (config.customDomain) {
+            const targetDomain = new URL(config.target.url).hostname;
+            modifiedCookie = modifiedCookie.replace(
+              new RegExp(`Domain=${targetDomain}`, 'gi'),
+              `Domain=${config.customDomain}`
+            );
+          }
+          
+          return modifiedCookie;
         });
         
-        proxyRes.on('end', () => {
-          body = Buffer.concat(body).toString();
+        res.setHeader('set-cookie', cookies);
+      }
+      
+      // Handle CORS headers
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      
+      // Handle content rewriting for custom domain (MINIMAL - no reCAPTCHA fix yet)
+      if (config.customDomain) {
+        const contentType = proxyRes.headers['content-type'] || '';
+        
+        if (
+          contentType.includes('text/html') ||
+          contentType.includes('application/javascript') ||
+          contentType.includes('text/css') ||
+          contentType.includes('application/json')
+        ) {
+          // responseBuffer is already decompressed by responseInterceptor!
+          let bodyString = responseBuffer.toString('utf8');
           
           // Replace target domain with custom domain
           const targetDomain = new URL(config.target.url).hostname;
-          body = body.replace(
+          bodyString = bodyString.replace(
             new RegExp(targetDomain, 'g'),
             config.customDomain
           );
           
-          res.send(body);
-        });
-        
-        // Prevent automatic pipe
-        delete proxyRes.headers['content-length'];
+          return bodyString;
+        }
       }
-    }
+      
+      // Return unmodified buffer for other content types
+      return responseBuffer;
+    }),
+    
+    // Error handling
+    error: (err, req, res) => {
+      logger.error('Proxy error', {
+        error: err.message,
+        url: req.url,
+        method: req.method,
+      });
+      
+      if (!res.headersSent) {
+        res.status(502).json({
+          error: 'Proxy Error',
+          message: 'Failed to proxy request',
+          details: err.message,
+        });
+      }
+    },
   },
   
   // Error handling

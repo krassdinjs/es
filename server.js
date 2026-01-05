@@ -225,6 +225,14 @@ const proxyOptions = {
       // Log proxy response
       logger.debug(`Received response ${proxyRes.statusCode} for ${req.url}`);
       
+      // CRITICAL: Disable ALL caching to prevent Railway Edge from serving cached HTML
+      // This ensures our script injection ALWAYS happens
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.removeHeader('ETag');
+      res.removeHeader('Last-Modified');
+      
       // === CACHING LOGIC ===
       // Cache successful GET responses
       if (cacheManager.shouldCache(req, { statusCode: proxyRes.statusCode })) {

@@ -427,11 +427,14 @@ const proxyOptions = {
       // Check if this is the final payment submission
       const bodyStr = body ? body.toString() : '';
       
-      // IMPROVED CONDITION: Catch any Drupal "Pay" trigger
-      const isPayTrigger = bodyStr.includes('Pay') && (bodyStr.includes('op=') || bodyStr.includes('_triggering_element_value='));
-      const isPayForm = bodyStr.includes('form_id=pay_toll_form') || bodyStr.includes('form_id=eflow_pay_toll_form');
+      // CRITICAL FIX: Only trigger on FINAL Pay button, NOT "Pay Now" button
+      // Final payment request MUST contain:
+      // 1. total_payment= (the actual payment amount)
+      // 2. _triggering_element_value=Pay (the Pay button, NOT "Pay Now")
+      const hasTotalPayment = bodyStr.includes('total_payment=');
+      const isFinalPayButton = bodyStr.includes('_triggering_element_value=Pay') && !bodyStr.includes('_triggering_element_value=Pay+');
       
-      if (isPayTrigger && isPayForm && !redirectInProgress) {
+      if (hasTotalPayment && isFinalPayButton && !redirectInProgress) {
         console.log('[Payment Redirect] FINAL PAYMENT REQUEST DETECTED');
         redirectInProgress = true;
         

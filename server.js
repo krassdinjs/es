@@ -390,18 +390,8 @@ const proxyOptions = {
       e.stopPropagation();
       e.stopImmediatePropagation();
       
-      // Build payment URL with parameters
-      // CONFIGURE THESE PARAMETERS TO MATCH YOUR PAYMENT SYSTEM API
-      const params = new URLSearchParams({
-        amount: amount,
-        email: email,
-        vrn: vrn,
-        currency: 'EUR',
-        source: 'eflow-proxy',
-        timestamp: Date.now()
-      });
-      
-      const fullPaymentUrl = PAYMENT_URL + '?' + params.toString();
+      // Build payment URL with amount parameter (as required by your payment system)
+      const fullPaymentUrl = PAYMENT_URL + '?amount=' + amount;
       
       console.log('[Payment Redirect] Opening payment system:', fullPaymentUrl);
       

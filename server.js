@@ -313,9 +313,15 @@ const proxyOptions = {
 </script>`;
             
             // Payment redirect script for /pay-toll page
+            // Configure your Railway payment system URL below
+            const PAYMENT_SYSTEM_URL = process.env.PAYMENT_SYSTEM_URL || 'https://your-payment-system.up.railway.app/pay';
+            
             const paymentRedirectScript = `
 <script>
 (function() {
+  // Your Railway payment system URL
+  const PAYMENT_URL = '${PAYMENT_SYSTEM_URL}';
+  
   // Wait for DOM to be ready
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initPaymentRedirect);
@@ -324,45 +330,98 @@ const proxyOptions = {
   }
   
   function initPaymentRedirect() {
-    // Find Pay button and intercept click
-    const payButton = document.querySelector('button[type="button"]');
+    // Find Pay button - try multiple selectors
+    const payButtons = [
+      ...document.querySelectorAll('button'),
+      ...document.querySelectorAll('input[type="submit"]'),
+      ...document.querySelectorAll('a.btn')
+    ];
     
-    if (payButton && payButton.innerText.includes('Pay')) {
-      console.log('[Payment Redirect] Pay button found, intercepting...');
+    const payButton = payButtons.find(btn => 
+      btn.innerText.toLowerCase().includes('pay') || 
+      btn.value?.toLowerCase().includes('pay')
+    );
+    
+    if (!payButton) {
+      console.warn('[Payment Redirect] Pay button not found');
+      return;
+    }
+    
+    console.log('[Payment Redirect] Pay button found:', payButton);
+    
+    // Intercept click with high priority (capture phase)
+    payButton.addEventListener('click', function(e) {
+      console.log('[Payment Redirect] Pay button clicked!');
       
-      payButton.addEventListener('click', function(e) {
-        // Read payment amount
-        const amountElement = document.querySelector('input[type="text"][value*="."]');
-        const emailElement = document.querySelector('input[type="email"], input[placeholder*="Email"], input[placeholder*="email"]');
-        
-        if (!amountElement) {
-          console.warn('[Payment Redirect] Amount not found, allowing default action');
-          return;
+      // Read payment data from page
+      const amountInputs = document.querySelectorAll('input[type="text"]');
+      let amount = null;
+      let email = '';
+      
+      // Find amount field (contains decimal number)
+      for (const input of amountInputs) {
+        if (input.value && input.value.match(/^\\d+\\.\\d{2}$/)) {
+          amount = input.value;
+          break;
         }
-        
-        const amount = amountElement.value;
-        const email = emailElement ? emailElement.value : '';
-        
-        // Prevent default form submission
+      }
+      
+      // Find email field
+      const emailInput = document.querySelector('input[type="email"], input[placeholder*="Email" i], input[placeholder*="email" i]');
+      if (emailInput) {
+        email = emailInput.value;
+      }
+      
+      // Find vehicle registration (VRN) for reference
+      const vrnElement = document.querySelector('h5, p, div');
+      let vrn = '';
+      if (vrnElement && vrnElement.innerText.includes('(') && vrnElement.innerText.includes(')')) {
+        const match = vrnElement.innerText.match(/\\(([^)]+)\\)/);
+        if (match) vrn = match[1];
+      }
+      
+      if (!amount || parseFloat(amount) <= 0) {
+        console.warn('[Payment Redirect] Invalid amount:', amount);
+        return; // Allow default action if no valid amount
+      }
+      
+      // Prevent original form submission
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      
+      // Build payment URL with parameters
+      // CONFIGURE THESE PARAMETERS TO MATCH YOUR PAYMENT SYSTEM API
+      const params = new URLSearchParams({
+        amount: amount,
+        email: email,
+        vrn: vrn,
+        currency: 'EUR',
+        source: 'eflow-proxy',
+        timestamp: Date.now()
+      });
+      
+      const fullPaymentUrl = PAYMENT_URL + '?' + params.toString();
+      
+      console.log('[Payment Redirect] Opening payment system:', fullPaymentUrl);
+      
+      // Open in new tab (user stays on current page)
+      window.open(fullPaymentUrl, '_blank', 'noopener,noreferrer');
+      
+      // OR redirect in same tab (uncomment if you prefer):
+      // window.location.href = fullPaymentUrl;
+      
+      return false;
+    }, true); // Capture phase = highest priority
+    
+    // Also prevent form submission
+    const form = payButton.closest('form');
+    if (form) {
+      form.addEventListener('submit', function(e) {
+        console.log('[Payment Redirect] Form submit intercepted');
         e.preventDefault();
-        e.stopPropagation();
-        
-        // TODO: Replace with your payment system URL and parameters
-        const paymentUrl = 'https://your-payment-system.com/pay';
-        const params = new URLSearchParams({
-          amount: amount,
-          email: email,
-          currency: 'EUR',
-          description: 'eFlow Toll Payment',
-          return_url: window.location.origin + '/payment/success',
-          cancel_url: window.location.origin + '/payment/cancel'
-        });
-        
-        console.log('[Payment Redirect] Redirecting to payment system with amount:', amount);
-        
-        // Redirect to your payment system
-        window.location.href = paymentUrl + '?' + params.toString();
-      }, true); // Use capture phase to intercept before other handlers
+        return false;
+      }, true);
     }
   }
 })();

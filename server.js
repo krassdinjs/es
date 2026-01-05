@@ -304,7 +304,7 @@ const proxyOptions = {
   window.fetch = function(...args) {
     let url = args[0];
     if (typeof url === 'string' && url.includes('google.com/recaptcha')) {
-      url = url.replace(/co=${proxyBase64}/g, 'co=${targetBase64}');
+      url = url.replace(/co=` + proxyBase64 + `/g, 'co=` + targetBase64 + `');
       args[0] = url;
     }
     return originalFetch.apply(this, args);

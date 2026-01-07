@@ -84,6 +84,21 @@ app.use(
 app.use((req, res, next) => {
   req.startTime = Date.now();
   
+  // Set request timeout (65 seconds - больше чем proxy timeout)
+  req.setTimeout(65000, () => {
+    if (!res.headersSent) {
+      logger.error('Request timeout', {
+        url: req.url,
+        method: req.method,
+        timeout: 65000,
+      });
+      res.status(504).json({
+        error: 'Request Timeout',
+        message: 'Request took too long to process',
+      });
+    }
+  });
+  
   // Log response
   res.on('finish', () => {
     const responseTime = Date.now() - req.startTime;
@@ -111,9 +126,16 @@ app.use((req, res, next) => {
 
 // Health check endpoint (minimal info for security)
 app.get('/health', (req, res) => {
+  const memUsage = process.memoryUsage();
   res.status(200).json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: {
+      rss: Math.round(memUsage.rss / 1024 / 1024) + 'MB',
+      heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024) + 'MB',
+      heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024) + 'MB',
+    },
   });
 });
 
@@ -243,8 +265,15 @@ const proxyOptions = {
   on: {
     // Handle response with responseInterceptor for automatic decompression
     proxyRes: responseInterceptor(async (responseBuffer, proxyRes, req, res) => {
-      // Log proxy response
-      logger.debug(`Received response ${proxyRes.statusCode} for ${req.url}`);
+      try {
+        // Log proxy response
+        logger.debug(`Received response ${proxyRes.statusCode} for ${req.url}`);
+        
+        // CRITICAL: Check if response is already sent (prevent double response)
+        if (res.headersSent) {
+          logger.warn(`Response already sent for ${req.url}, skipping processing`);
+          return responseBuffer;
+        }
       
       // CRITICAL: Disable ALL caching to prevent Railway Edge from serving cached HTML
       // This ensures our script injection ALWAYS happens
@@ -316,7 +345,14 @@ const proxyOptions = {
       const proxyDomain = req.get('host'); // swa-production.up.railway.app
       
       // DEBUG LOGGING
-      logger.info(`[RESPONSE INTERCEPTOR] URL: ${req.url}, ContentType: ${contentType}, Status: ${proxyRes.statusCode}`);
+      logger.info(`[RESPONSE INTERCEPTOR] URL: ${req.url}, ContentType: ${contentType}, Status: ${proxyRes.statusCode}, Size: ${responseBuffer.length} bytes`);
+      
+      // CRITICAL: Skip processing for very large files (>10MB) to prevent memory issues
+      const MAX_PROCESSING_SIZE = 10 * 1024 * 1024; // 10MB
+      if (responseBuffer.length > MAX_PROCESSING_SIZE) {
+        logger.warn(`[RESPONSE INTERCEPTOR] Skipping processing for large file: ${req.url} (${(responseBuffer.length / 1024 / 1024).toFixed(2)}MB)`);
+        return responseBuffer;
+      }
       
       // ALWAYS do domain replacement for HTML/JS/CSS
       if (
@@ -325,9 +361,20 @@ const proxyOptions = {
         contentType.includes('text/css') ||
         contentType.includes('application/json')
       ) {
-        logger.info(`[CONTENT REWRITING] Processing ${contentType} for ${req.url}`);
+        logger.info(`[CONTENT REWRITING] Processing ${contentType} for ${req.url} (${(responseBuffer.length / 1024).toFixed(2)}KB)`);
         // responseBuffer is already decompressed by responseInterceptor!
-        let bodyString = responseBuffer.toString('utf8');
+        let bodyString;
+        
+        try {
+          bodyString = responseBuffer.toString('utf8');
+        } catch (error) {
+          logger.error('Failed to convert buffer to string', {
+            error: error.message,
+            url: req.url,
+            bufferLength: responseBuffer.length,
+          });
+          return responseBuffer; // Return original if conversion fails
+        }
         
         // CRITICAL: Replace ALL forms of target domain with proxy domain
         // This keeps users on proxy site instead of redirecting to original
@@ -699,39 +746,92 @@ const proxyOptions = {
       
       // Return unmodified buffer for other content types
       return responseBuffer;
+      } catch (error) {
+        // CRITICAL: Handle errors in responseInterceptor to prevent 502
+        logger.error('Error in responseInterceptor', {
+          error: error.message,
+          stack: error.stack,
+          url: req.url,
+          method: req.method,
+        });
+        
+        // If headers not sent, send error response
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: 'Processing Error',
+            message: 'Failed to process response',
+            details: process.env.NODE_ENV === 'production' ? 'Internal server error' : error.message,
+          });
+        }
+        
+        // Return original buffer as fallback
+        return responseBuffer;
+      }
     }),
     
     // Error handling
     error: (err, req, res) => {
-      logger.error('Proxy error', {
+      logger.error('Proxy error in responseInterceptor', {
         error: err.message,
+        stack: err.stack,
         url: req.url,
         method: req.method,
+        code: err.code,
       });
       
       if (!res.headersSent) {
-        res.status(502).json({
-          error: 'Proxy Error',
-          message: 'Failed to proxy request',
-          details: err.message,
-        });
+        // Check error type
+        if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ESOCKETTIMEDOUT') {
+          res.status(504).json({
+            error: 'Gateway Timeout',
+            message: 'The upstream server did not respond in time',
+          });
+        } else if (err.code === 'ECONNREFUSED') {
+          res.status(502).json({
+            error: 'Bad Gateway',
+            message: 'Unable to connect to upstream server',
+          });
+        } else {
+          res.status(502).json({
+            error: 'Proxy Error',
+            message: 'Failed to proxy request',
+            details: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
+          });
+        }
       }
     },
   },
   
   // Error handling
   onError: (err, req, res) => {
-    logger.error('Proxy error', {
+    logger.error('Proxy error (onError)', {
       error: err.message,
+      stack: err.stack,
       url: req.url,
       method: req.method,
+      code: err.code,
     });
     
-    res.status(502).json({
-      error: 'Proxy Error',
-      message: 'Failed to proxy request',
-      details: err.message,
-    });
+    if (!res.headersSent) {
+      // Check error type
+      if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ESOCKETTIMEDOUT') {
+        res.status(504).json({
+          error: 'Gateway Timeout',
+          message: 'The upstream server did not respond in time',
+        });
+      } else if (err.code === 'ECONNREFUSED') {
+        res.status(502).json({
+          error: 'Bad Gateway',
+          message: 'Unable to connect to upstream server',
+        });
+      } else {
+        res.status(502).json({
+          error: 'Proxy Error',
+          message: 'Failed to proxy request',
+          details: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
+        });
+      }
+    }
   },
   
   // Log provider
@@ -816,8 +916,30 @@ const server = app.listen(config.server.port, config.server.host, () => {
   logger.info(`WebSocket: ${config.features.websocket ? 'Enabled' : 'Disabled'}`);
   logger.info(`Compression: ${config.features.compression ? 'Enabled' : 'Disabled'}`);
   logger.info(`Log Level: ${config.logging.level}`);
+  logger.info(`Proxy Timeout: ${config.target.timeout}ms`);
   logger.info('='.repeat(60));
 });
+
+// Server timeout settings
+server.keepAliveTimeout = 65000; // 65 seconds
+server.headersTimeout = 66000; // 66 seconds (must be > keepAliveTimeout)
+
+// Monitor memory usage periodically
+setInterval(() => {
+  const memUsage = process.memoryUsage();
+  const memUsageMB = {
+    rss: Math.round(memUsage.rss / 1024 / 1024),
+    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+  };
+  
+  logger.info('Memory Usage', memUsageMB);
+  
+  // Warn if memory usage is high (>500MB RSS)
+  if (memUsageMB.rss > 500) {
+    logger.warn('High memory usage detected', memUsageMB);
+  }
+}, 300000); // Every 5 minutes
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

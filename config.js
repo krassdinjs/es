@@ -4,7 +4,7 @@ module.exports = {
   // Target configuration
   target: {
     url: process.env.TARGET_URL || 'https://efl0w.com',
-    timeout: parseInt(process.env.PROXY_TIMEOUT) || 30000,
+    timeout: parseInt(process.env.PROXY_TIMEOUT) || 60000, // Увеличено до 60 секунд
   },
 
   // Server configuration

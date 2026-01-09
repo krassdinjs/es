@@ -1,32 +1,45 @@
 # Dependencies
 node_modules/
-yarn.lock
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Environment
+# Environment variables
 .env
-.env.*
+.env.local
+.env.*.local
 
 # Logs
 logs/
 *.log
+pm2-error.log
+pm2-out.log
 
-# Runtime
-pids/
-*.pid
-*.seed
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 
-# Build
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build files
 dist/
 build/
 
-# Backups
-backup/
+# PM2
+.pm2/
+
+# SSL certificates
+*.pem
+*.key
+*.crt
+*.cert

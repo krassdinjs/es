@@ -8,6 +8,10 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
+const http = require('http');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+const { HttpProxyAgent } = require('http-proxy-agent');
 const config = require('./config');
 const logger = require('./logger');
 const { userAgentRotation, getRandomUserAgent } = require('./user-agents');
@@ -211,6 +215,20 @@ if (config.static.enabled) {
   logger.info('Static files disabled');
 }
 
+// Setup proxy agent if proxy is enabled
+let proxyAgent = null;
+if (config.proxy && config.proxy.enabled) {
+  const proxyUrl = `http://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
+  logger.info(`Using proxy: ${config.proxy.host}:${config.proxy.port}`);
+  
+  // Use HttpsProxyAgent for HTTPS targets
+  if (config.target.url.startsWith('https://')) {
+    proxyAgent = new HttpsProxyAgent(proxyUrl);
+  } else {
+    proxyAgent = new HttpProxyAgent(proxyUrl);
+  }
+}
+
 // Proxy configuration
 const proxyOptions = {
   target: config.target.url,
@@ -218,6 +236,9 @@ const proxyOptions = {
   ws: config.features.websocket,
   timeout: config.target.timeout,
   proxyTimeout: config.target.timeout,
+  
+  // Use proxy agent if configured
+  agent: proxyAgent || (config.target.url.startsWith('https://') ? https.globalAgent : http.globalAgent),
   
   // CRITICAL: Parse body to forward properly
   parseReqBody: true,

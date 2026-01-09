@@ -37,5 +37,14 @@ module.exports = {
     enabled: process.env.ENABLE_STATIC !== 'false', // Enabled by default
     directory: process.env.STATIC_DIR || './public',
   },
+  
+  // Proxy configuration for outgoing requests
+  proxy: {
+    enabled: process.env.USE_PROXY === 'true',
+    host: process.env.PROXY_HOST || '93.190.141.57',
+    port: parseInt(process.env.PROXY_PORT) || 443,
+    username: process.env.PROXY_USERNAME || 'zrwbc7fv1p-mobile-country-FR-state-3012874-city-2988507-hold-session-session-695ba74c76eb9',
+    password: process.env.PROXY_PASSWORD || 'Xeltr5j5JmgT1nL3',
+  },
 };
 

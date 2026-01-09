@@ -899,6 +899,20 @@ const proxyOptions = {
   logLevel: config.logging.level === 'debug' ? 'debug' : 'warn',
 };
 
+// Health check endpoint (before proxy)
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Test endpoint to check if server is responding
+app.get('/test', (req, res) => {
+  res.status(200).json({ 
+    message: 'Server is working',
+    target: config.target.url,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Apply proxy middleware to all routes
 app.use('/', createProxyMiddleware(proxyOptions));
 

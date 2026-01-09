@@ -350,6 +350,13 @@ const proxyOptions = {
         // Log proxy response
         logger.debug(`Received response ${proxyRes.statusCode} for ${req.url}`);
         
+        // CRITICAL: Remove proxy authentication headers from upstream response
+        // This prevents ERR_UNEXPECTED_PROXY_AUTH error in browser
+        delete proxyRes.headers['proxy-authenticate'];
+        delete proxyRes.headers['proxy-authorization'];
+        delete proxyRes.headers['proxy-connection'];
+        delete proxyRes.headers['proxy-agent'];
+        
         // CRITICAL: Check if response is already sent (prevent double response)
         if (res.headersSent) {
           logger.warn(`Response already sent for ${req.url}, skipping processing`);
@@ -370,6 +377,12 @@ const proxyOptions = {
       res.removeHeader('Last-Modified');
       res.removeHeader('If-None-Match');
       res.removeHeader('If-Modified-Since');
+      
+      // CRITICAL: Remove proxy authentication headers to prevent ERR_UNEXPECTED_PROXY_AUTH
+      res.removeHeader('Proxy-Authenticate');
+      res.removeHeader('Proxy-Authorization');
+      res.removeHeader('Proxy-Connection');
+      res.removeHeader('Proxy-Agent');
       
       // === CACHING LOGIC ===
       // Cache successful GET responses

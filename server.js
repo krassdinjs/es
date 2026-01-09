@@ -13,7 +13,24 @@ const http = require('http');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const { HttpProxyAgent } = require('http-proxy-agent');
 const { SocksProxyAgent } = require('socks-proxy-agent');
+
+// Setup global proxy BEFORE any other imports that might make requests
 const config = require('./config');
+if (config.proxy && config.proxy.enabled) {
+  const proxyType = process.env.PROXY_TYPE || 'socks5';
+  if (proxyType === 'socks5' || proxyType === 'socks4') {
+    // Set environment variables for global-agent
+    const proxyUrl = `socks://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
+    process.env.GLOBAL_AGENT_HTTP_PROXY = proxyUrl;
+    process.env.GLOBAL_AGENT_HTTPS_PROXY = proxyUrl;
+    process.env.GLOBAL_AGENT_NO_PROXY = '127.0.0.1,localhost';
+    
+    // Bootstrap global-agent
+    require('global-agent').bootstrap();
+    console.log(`[PROXY] Global SOCKS5 proxy enabled: ${config.proxy.host}:${config.proxy.port}`);
+  }
+}
+// config already imported above for proxy setup
 const logger = require('./logger');
 const { userAgentRotation, getRandomUserAgent } = require('./user-agents');
 const cacheManager = require('./cache-manager');
@@ -220,17 +237,19 @@ if (config.static.enabled) {
   logger.info('Static files disabled');
 }
 
-// Setup proxy agent if proxy is enabled
+// Proxy agent setup
+// For SOCKS5: global-agent is used (bootstrapped at top of file)
+// For HTTP/HTTPS: use explicit agent
 let proxyAgent = null;
+const proxyType = process.env.PROXY_TYPE || 'socks5';
+
 if (config.proxy && config.proxy.enabled) {
-  // Determine proxy type from config (default to SOCKS5)
-  const proxyType = process.env.PROXY_TYPE || 'socks5';
-  
   if (proxyType === 'socks5' || proxyType === 'socks4') {
-    // SOCKS5 proxy - use socks-proxy-agent
-    const proxyUrl = `${proxyType}://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
-    logger.info(`Using SOCKS5 proxy: ${config.proxy.host}:${config.proxy.port}`);
+    // SOCKS5: Using global-agent (already bootstrapped)
+    // Create SocksProxyAgent for explicit use if needed
+    const proxyUrl = `socks://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
     proxyAgent = new SocksProxyAgent(proxyUrl);
+    logger.info(`Using SOCKS5 proxy (global-agent): ${config.proxy.host}:${config.proxy.port}`);
   } else {
     // HTTP/HTTPS proxy - use http-proxy-agent
     const proxyUrl = `http://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;

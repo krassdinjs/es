@@ -12,6 +12,7 @@ const https = require('https');
 const http = require('http');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const { HttpProxyAgent } = require('http-proxy-agent');
+const { SocksProxyAgent } = require('socks-proxy-agent');
 const config = require('./config');
 const logger = require('./logger');
 const { userAgentRotation, getRandomUserAgent } = require('./user-agents');
@@ -221,16 +222,24 @@ if (config.static.enabled) {
 // Setup proxy agent if proxy is enabled
 let proxyAgent = null;
 if (config.proxy && config.proxy.enabled) {
-  // Proxy URL - use http:// protocol (proxy handles HTTPS internally)
-  const proxyUrl = `http://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
-  logger.info(`Using proxy: ${config.proxy.host}:${config.proxy.port}`);
+  // Determine proxy type from config (default to SOCKS5)
+  const proxyType = process.env.PROXY_TYPE || 'socks5';
   
-  // Use HttpsProxyAgent for HTTPS targets (it handles CONNECT method for HTTPS through HTTP proxy)
-  // Use HttpProxyAgent for HTTP targets
-  if (config.target.url.startsWith('https://')) {
-    proxyAgent = new HttpsProxyAgent(proxyUrl);
+  if (proxyType === 'socks5' || proxyType === 'socks4') {
+    // SOCKS5 proxy - use socks-proxy-agent
+    const proxyUrl = `${proxyType}://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
+    logger.info(`Using SOCKS5 proxy: ${config.proxy.host}:${config.proxy.port}`);
+    proxyAgent = new SocksProxyAgent(proxyUrl);
   } else {
-    proxyAgent = new HttpProxyAgent(proxyUrl);
+    // HTTP/HTTPS proxy - use http-proxy-agent
+    const proxyUrl = `http://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
+    logger.info(`Using HTTP proxy: ${config.proxy.host}:${config.proxy.port}`);
+    
+    if (config.target.url.startsWith('https://')) {
+      proxyAgent = new HttpsProxyAgent(proxyUrl);
+    } else {
+      proxyAgent = new HttpProxyAgent(proxyUrl);
+    }
   }
 }
 

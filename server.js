@@ -100,13 +100,16 @@ app.use(
 app.use((req, res, next) => {
   req.startTime = Date.now();
   
-  // Set request timeout (65 seconds - больше чем proxy timeout)
-  req.setTimeout(65000, () => {
+  // CRITICAL FIX: Use dynamic timeout from config (PROXY_TIMEOUT + buffer)
+  // Must be GREATER than proxy timeout to allow proxy to complete
+  const requestTimeout = config.target.timeout + 30000; // proxy timeout + 30s buffer
+  
+  req.setTimeout(requestTimeout, () => {
     if (!res.headersSent) {
       logger.error('Request timeout', {
         url: req.url,
         method: req.method,
-        timeout: 65000,
+        timeout: requestTimeout,
       });
       res.status(504).json({
         error: 'Request Timeout',
@@ -1015,12 +1018,23 @@ const server = app.listen(config.server.port, config.server.host, () => {
   logger.info(`Compression: ${config.features.compression ? 'Enabled' : 'Disabled'}`);
   logger.info(`Log Level: ${config.logging.level}`);
   logger.info(`Proxy Timeout: ${config.target.timeout}ms`);
+  logger.info(`Request Timeout: ${config.target.timeout + 30000}ms`);
+  if (config.proxy && config.proxy.enabled) {
+    logger.info(`External Proxy: ${config.proxy.host}:${config.proxy.port} (ENABLED)`);
+  } else {
+    logger.info(`External Proxy: DISABLED`);
+  }
   logger.info('='.repeat(60));
 });
 
-// Server timeout settings
-server.keepAliveTimeout = 65000; // 65 seconds
-server.headersTimeout = 66000; // 66 seconds (must be > keepAliveTimeout)
+// Server timeout settings - MUST be greater than proxy timeout
+// CRITICAL FIX: Dynamic timeouts based on PROXY_TIMEOUT config
+const serverTimeout = config.target.timeout + 60000; // proxy timeout + 60s buffer
+server.keepAliveTimeout = serverTimeout;
+server.headersTimeout = serverTimeout + 1000; // must be > keepAliveTimeout
+server.timeout = serverTimeout + 5000; // overall server timeout
+
+logger.info(`Server timeouts configured: keepAlive=${serverTimeout}ms, headers=${serverTimeout + 1000}ms`);
 
 // Monitor memory usage periodically
 setInterval(() => {

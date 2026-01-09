@@ -218,10 +218,12 @@ if (config.static.enabled) {
 // Setup proxy agent if proxy is enabled
 let proxyAgent = null;
 if (config.proxy && config.proxy.enabled) {
+  // Proxy URL - use http:// protocol (proxy handles HTTPS internally)
   const proxyUrl = `http://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
   logger.info(`Using proxy: ${config.proxy.host}:${config.proxy.port}`);
   
-  // Use HttpsProxyAgent for HTTPS targets
+  // Use HttpsProxyAgent for HTTPS targets (it handles CONNECT method for HTTPS through HTTP proxy)
+  // Use HttpProxyAgent for HTTP targets
   if (config.target.url.startsWith('https://')) {
     proxyAgent = new HttpsProxyAgent(proxyUrl);
   } else {

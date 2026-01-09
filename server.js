@@ -22,8 +22,10 @@ if (config.features.websocket) {
 }
 
 // Trust proxy if configured
+// NOTE: Setting trust proxy to specific IPs to avoid rate limit issues
 if (config.server.trustProxy) {
-  app.set('trust proxy', true);
+  // Trust only localhost and private networks to avoid rate limit bypass
+  app.set('trust proxy', ['127.0.0.1', '::1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']);
 }
 
 // Middleware: Security headers (relaxed for proxy)
@@ -54,14 +56,14 @@ const limiter = rateLimit({
     // Use X-Forwarded-For if available, otherwise use IP
     return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress || 'unknown';
   },
-  validate: {
-    trustProxy: false, // Disable trust proxy validation to avoid error
-  },
+  // Skip validation to avoid trust proxy error
   skip: (req) => {
     // Skip rate limiting for static resources and health checks
     if (req.url === '/health' || req.url === '/cache-stats') return true;
     return req.url.match(/\.(css|js|jpg|jpeg|png|gif|svg|ico|woff|woff2|ttf|eot)$/);
   },
+  // Disable validation that causes error
+  validate: false,
 });
 
 app.use(limiter);

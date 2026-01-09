@@ -55,14 +55,14 @@ module.exports = {
     directory: process.env.STATIC_DIR || './public',
   },
   
-  // Proxy configuration for outgoing requests (iproyal.com residential proxy)
-  // CRITICAL: These defaults MUST match .env values as fallback
+  // Proxy configuration for outgoing requests
+  // Set USE_PROXY=false to disable external proxy
   proxy: {
     enabled: process.env.USE_PROXY === 'true',
-    host: process.env.PROXY_HOST || 'geo.iproyal.com',
-    port: parseInt(process.env.PROXY_PORT) || 12321,
-    username: process.env.PROXY_USERNAME || 'zrwbc7fv1p-mobile-country-FR',
-    password: process.env.PROXY_PASSWORD || 'Y5zLYVxIQz7xb8Dq',
+    host: process.env.PROXY_HOST || '',
+    port: parseInt(process.env.PROXY_PORT) || 0,
+    username: process.env.PROXY_USERNAME || '',
+    password: process.env.PROXY_PASSWORD || '',
   },
   
   // Payment system URL

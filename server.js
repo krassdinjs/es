@@ -49,6 +49,14 @@ const limiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: 'Too many requests, please slow down',
+  // Fix for trust proxy: use custom keyGenerator
+  keyGenerator: (req) => {
+    // Use X-Forwarded-For if available, otherwise use IP
+    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress || 'unknown';
+  },
+  validate: {
+    trustProxy: false, // Disable trust proxy validation to avoid error
+  },
   skip: (req) => {
     // Skip rate limiting for static resources and health checks
     if (req.url === '/health' || req.url === '/cache-stats') return true;

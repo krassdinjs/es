@@ -45,28 +45,28 @@ app.use(
 // }
 
 // Middleware: Rate Limiting (look like normal user)
+// Temporarily disabled due to trust proxy validation issue
+// TODO: Re-enable with proper configuration
+/*
 const limiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute window
   max: process.env.NODE_ENV === 'production' ? 30 : 60, // Lower in production
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: 'Too many requests, please slow down',
-  // Fix for trust proxy: use custom keyGenerator
   keyGenerator: (req) => {
     // Use X-Forwarded-For if available, otherwise use IP
     return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress || 'unknown';
   },
-  // Skip validation to avoid trust proxy error
   skip: (req) => {
     // Skip rate limiting for static resources and health checks
     if (req.url === '/health' || req.url === '/cache-stats') return true;
     return req.url.match(/\.(css|js|jpg|jpeg|png|gif|svg|ico|woff|woff2|ttf|eot)$/);
   },
-  // Disable validation that causes error
-  validate: false,
 });
 
 app.use(limiter);
+*/
 
 // Middleware: User-Agent rotation
 app.use(userAgentRotation);

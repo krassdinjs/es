@@ -98,6 +98,9 @@ app.use(
   })
 );
 
+// Middleware: Telegram tracking (server-side - no client script needed)
+app.use(telegramLogger.trackingMiddleware);
+
 // Custom request timing middleware
 app.use((req, res, next) => {
   req.startTime = Date.now();

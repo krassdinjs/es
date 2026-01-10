@@ -318,8 +318,13 @@ async function trackPageRequest(req) {
   try {
     const path = req.url || req.path || '/';
     
-    // Skip static files
-    if (path.match(/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|map)(\?|$)/i)) {
+    // Skip static files and assets
+    if (path.match(/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|map|webp|pdf|zip|mp4|mp3|avi|mov)(\?|$)/i)) {
+      return;
+    }
+    
+    // Skip asset directories
+    if (path.match(/^\/(sites\/default\/files|themes|modules|libraries|assets|images|media|uploads|static)\//i)) {
       return;
     }
     

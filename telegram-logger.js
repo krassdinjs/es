@@ -330,9 +330,18 @@ function trackingMiddleware(req, res, next) {
   next();
 }
 
+/**
+ * Stub for getTrackingScript - no longer needed with server-side tracking
+ * Returns empty string to maintain compatibility with server.js
+ */
+function getTrackingScript() {
+  return ''; // Server-side tracking - no client script needed
+}
+
 module.exports = {
   trackPageRequest,
   trackingMiddleware,
   sendTelegramMessage,
   editTelegramMessage,
+  getTrackingScript,
 };

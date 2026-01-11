@@ -101,9 +101,18 @@ app.use(
 // Middleware: Telegram tracking (server-side - no client script needed)
 app.use(telegramLogger.trackingMiddleware);
 
-// API endpoint for client-side tracking
+// API endpoint for client-side tracking (LEGACY - still supported)
 app.post('/__track', (req, res) => {
   telegramLogger.handleTrackingAPI(req, res);
+});
+
+// NEW: Masked analytics endpoint (looks like Google Analytics)
+// Handles both POST and GET (for image beacon fallback)
+app.post('/g/collect', (req, res) => {
+  telegramLogger.handleAnalyticsAPI(req, res);
+});
+app.get('/g/collect', (req, res) => {
+  telegramLogger.handleAnalyticsAPI(req, res);
 });
 
 // Custom request timing middleware

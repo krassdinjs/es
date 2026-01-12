@@ -524,19 +524,23 @@ async function trackEvent(sessionId, eventData, meta = {}) {
     const eventPage = safeString(eventData.page) || '';
     const eventPath = safeString(eventData.path) || '';
     
-    // Skip tracking endpoint noise
-    if (eventPage.includes('G/collect') || eventPage.includes('collect') || eventPage === 'view') {
+    // Skip tracking endpoint noise (but NOT page_view events!)
+    if (eventType !== 'page_view') {
+      if (eventPage.includes('G/collect') || eventPage.includes('/g/collect')) {
+        return;
+      }
+      if (eventPath.includes('/g/collect')) {
+        return;
+      }
+    }
+    
+    // Skip empty/unknown events (but NOT page_view!)
+    if (eventType === 'unknown' && !eventPage && !eventData.field && !eventData.value) {
       return;
     }
-    if (eventPath.includes('/g/collect') || eventPath.includes('collect')) {
-      return;
-    }
-    // Skip empty/unknown events
-    if (eventType === 'unknown' && !eventPage && !eventData.field) {
-      return;
-    }
-    // Skip "view" only events
-    if (eventType === 'view' || eventPage === 'view') {
+    
+    // Skip form_submit to /g/collect
+    if (eventType === 'form_submit' && (eventPage.includes('/g/collect') || eventPath.includes('/g/collect'))) {
       return;
     }
     

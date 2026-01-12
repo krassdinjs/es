@@ -366,36 +366,50 @@ const proxyOptions = {
     // Replace proxy domain with target domain in Origin/Referer headers
     const proxyDomain = req.headers.host || '';
     const targetDomain = new URL(config.target.url).hostname;
+    const targetOrigin = config.target.url.replace(/\/$/, ''); // Remove trailing slash
     
-    // Fix Origin header
+    // Build proxy origin for replacement
+    const proxyOrigin = `${req.protocol}://${proxyDomain}`;
+    
+    // Fix Origin header - CRITICAL for AJAX requests and reCAPTCHA
     if (req.headers.origin) {
       let origin = req.headers.origin;
-      if (origin.includes(proxyDomain)) {
-        origin = origin.replace(proxyDomain, targetDomain);
-        // Also fix protocol if needed
-        if (origin.startsWith('http://') && config.target.url.startsWith('https://')) {
+      // Replace full proxy origin with target origin
+      if (origin.includes(proxyDomain) || origin.includes(proxyOrigin)) {
+        origin = origin.replace(proxyOrigin, targetOrigin);
+        origin = origin.replace(new RegExp(proxyDomain.replace(/\./g, '\\.'), 'g'), targetDomain);
+        // Ensure protocol is correct
+        if (origin.startsWith('http://') && targetOrigin.startsWith('https://')) {
           origin = origin.replace('http://', 'https://');
         }
+        logger.debug(`[Header Fix] Origin: ${req.headers.origin} -> ${origin}`);
         proxyReq.setHeader('Origin', origin);
       } else {
+        // Keep original if it doesn't contain proxy domain
         proxyReq.setHeader('Origin', req.headers.origin);
       }
     }
+    // DO NOT set Origin if missing - let browser/client set it naturally
     
-    // Fix Referer header
+    // Fix Referer header - CRITICAL for AJAX requests and reCAPTCHA
     if (req.headers.referer) {
       let referer = req.headers.referer;
-      if (referer.includes(proxyDomain)) {
-        referer = referer.replace(proxyDomain, targetDomain);
-        // Also fix protocol if needed
-        if (referer.startsWith('http://') && config.target.url.startsWith('https://')) {
+      // Replace full proxy origin with target origin
+      if (referer.includes(proxyDomain) || referer.includes(proxyOrigin)) {
+        referer = referer.replace(proxyOrigin, targetOrigin);
+        referer = referer.replace(new RegExp(proxyDomain.replace(/\./g, '\\.'), 'g'), targetDomain);
+        // Ensure protocol is correct
+        if (referer.startsWith('http://') && targetOrigin.startsWith('https://')) {
           referer = referer.replace('http://', 'https://');
         }
+        logger.debug(`[Header Fix] Referer: ${req.headers.referer} -> ${referer}`);
         proxyReq.setHeader('Referer', referer);
       } else {
+        // Keep original if it doesn't contain proxy domain
         proxyReq.setHeader('Referer', req.headers.referer);
       }
     }
+    // DO NOT set Referer if missing - let browser/client set it naturally
     
     // Set realistic Accept headers
     if (!proxyReq.getHeader('Accept')) {

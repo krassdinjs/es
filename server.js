@@ -1150,11 +1150,251 @@ const proxyOptions = {
     console.log('[Payment Redirect] Pay button interceptor initialized with MutationObserver');
   }
   
-  // Initialize Pay button interceptor when DOM is ready
+  // Check if user is on journey date/time page (step before payment)
+  function isJourneyDatePage() {
+    try {
+      if (!document.body) return false;
+      
+      // Check for journey date/time fields
+      const hasJourneyDate = document.querySelector('input[name*="journey_date"], input[id*="journey_date"], input[name*="last_journey"][name*="date"]') !== null;
+      const hasJourneyTime = document.querySelector('input[name*="journey_time"], select[name*="journey_time"], input[name*="last_journey"][name*="time"]') !== null;
+      const hasOwnershipCheckbox = document.querySelector('input[name*="ownership"], input[id*="ownership"]') !== null;
+      
+      // Check for "Enter Last Journey Date and Time" heading
+      const hasHeading = document.body.innerText.includes('Enter Last Journey Date and Time') || 
+                        document.body.innerText.includes('Last M50 Journey Date');
+      
+      // Must have at least 2 indicators
+      const indicators = [hasJourneyDate, hasJourneyTime, hasOwnershipCheckbox, hasHeading].filter(Boolean).length;
+      
+      return indicators >= 2;
+    } catch (err) {
+      console.error('[Payment Redirect] Error checking journey date page:', err);
+      return false;
+    }
+  }
+  
+  // Setup Continue button interceptor - redirects to next step (Journeys to Pay page)
+  function setupContinueButtonInterceptor() {
+    // Function to intercept Continue button clicks
+    function interceptContinueButton(btn) {
+      // Check if already intercepted
+      if (btn._continueIntercepted) return;
+      btn._continueIntercepted = true;
+      
+      // Add click listener
+      btn.addEventListener('click', function(e) {
+        // Only intercept if we're on journey date page
+        if (!isJourneyDatePage()) {
+          console.log('[Payment Redirect] Not on journey date page, allowing normal click');
+          return;
+        }
+        
+        console.log('[Payment Redirect] Continue button clicked on journey date page - intercepting!');
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        // Extract form data
+        const form = btn.closest('form');
+        if (!form) {
+          console.error('[Payment Redirect] No form found for Continue button');
+          return false;
+        }
+        
+        // Get form data
+        const formData = new FormData(form);
+        const journeyDate = formData.get('last_journey[journey_date]') || 
+                          formData.get('journey_date') || 
+                          document.querySelector('input[name*="journey_date"]')?.value;
+        const journeyTime = formData.get('last_journey[journey_time]') || 
+                          formData.get('journey_time') || 
+                          document.querySelector('select[name*="journey_time"], input[name*="journey_time"]')?.value;
+        const ownership = formData.get('last_journey[ownership_acknowledgment]') || 
+                         document.querySelector('input[name*="ownership"]')?.checked;
+        
+        console.log('[Payment Redirect] Form data:', { journeyDate, journeyTime, ownership });
+        
+        // CRITICAL: Instead of blocking, we need to programmatically trigger Drupal AJAX
+        // to get to the next step (Journeys to Pay page)
+        // Drupal AJAX uses data-drupal-ajax attribute
+        const drupalAjaxAttr = btn.getAttribute('data-drupal-ajax') || btn.getAttribute('data-once');
+        
+        if (drupalAjaxAttr) {
+          console.log('[Payment Redirect] Found Drupal AJAX attribute, triggering programmatically');
+          
+          // Get form build ID
+          const formBuildId = formData.get('form_build_id') || 
+                            document.querySelector('input[name="form_build_id"]')?.value;
+          const formId = formData.get('form_id') || 
+                        document.querySelector('input[name="form_id"]')?.value;
+          
+          // Build AJAX request manually
+          const ajaxUrl = window.location.pathname + '?_wrapper_format=drupal_ajax&ajax_form=1';
+          const triggerName = btn.name || 'next';
+          const triggerValue = btn.value || 'Continue';
+          
+          // Create AJAX request to get next step
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', ajaxUrl, true);
+          xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+          xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+          
+          // Build request body
+          let requestBody = 'form_build_id=' + encodeURIComponent(formBuildId) +
+                          '&form_id=' + encodeURIComponent(formId) +
+                          '&_triggering_element_name=' + encodeURIComponent(triggerName) +
+                          '&_triggering_element_value=' + encodeURIComponent(triggerValue) +
+                          '&_drupal_ajax=1';
+          
+          // Add form fields
+          if (journeyDate) {
+            requestBody += '&last_journey[journey_date]=' + encodeURIComponent(journeyDate);
+          }
+          if (journeyTime) {
+            requestBody += '&last_journey[journey_time]=' + encodeURIComponent(journeyTime);
+          }
+          if (ownership) {
+            requestBody += '&last_journey[ownership_acknowledgment]=1';
+          }
+          
+          // Add ajax_page_state
+          const ajaxPageState = document.querySelector('input[name="ajax_page_state[theme]"]')?.value || 'eflow';
+          requestBody += '&ajax_page_state[theme]=' + encodeURIComponent(ajaxPageState);
+          
+          console.log('[Payment Redirect] Sending AJAX request to get next step');
+          
+          xhr.onload = function() {
+            if (xhr.status === 200) {
+              try {
+                const response = JSON.parse(xhr.responseText);
+                console.log('[Payment Redirect] AJAX response received, processing...');
+                
+                // Drupal AJAX returns commands array
+                if (response && Array.isArray(response)) {
+                  // Wait for Drupal to be ready
+                  if (typeof Drupal !== 'undefined' && Drupal.ajax) {
+                    // Use Drupal's AJAX command processor
+                    const ajaxObject = {
+                      url: ajaxUrl,
+                      element: form,
+                      settings: {}
+                    };
+                    
+                    response.forEach(function(command) {
+                      if (Drupal.ajax.prototype.commands && Drupal.ajax.prototype.commands[command.command]) {
+                        try {
+                          Drupal.ajax.prototype.commands[command.command](ajaxObject, command, 'success');
+                        } catch (cmdError) {
+                          console.warn('[Payment Redirect] Error executing command:', command.command, cmdError);
+                        }
+                      } else {
+                        console.warn('[Payment Redirect] Unknown command:', command.command);
+                      }
+                    });
+                    console.log('[Payment Redirect] Next step loaded successfully via Drupal AJAX');
+                  } else {
+                    console.warn('[Payment Redirect] Drupal AJAX not available, trying manual DOM update');
+                    // Fallback: try to extract HTML from response and update manually
+                    response.forEach(function(command) {
+                      if (command.command === 'insert' || command.command === 'replaceWith') {
+                        const selector = command.selector || '.ajax-wrapper, .form-wrapper, form';
+                        const wrapper = document.querySelector(selector);
+                        if (wrapper && command.data) {
+                          wrapper.innerHTML = command.data;
+                          console.log('[Payment Redirect] DOM updated manually');
+                          
+                          // Re-run interceptors to catch new buttons
+                          setTimeout(function() {
+                            if (typeof setupPayButtonInterceptor === 'function') setupPayButtonInterceptor();
+                            if (typeof setupContinueButtonInterceptor === 'function') setupContinueButtonInterceptor();
+                          }, 500);
+                        }
+                      } else if (command.command === 'updateBuildId') {
+                        // Update form build ID
+                        const buildIdInput = document.querySelector('input[name="form_build_id"]');
+                        if (buildIdInput && command.new) {
+                          buildIdInput.value = command.new;
+                        }
+                      }
+                    });
+                  }
+                } else {
+                  console.warn('[Payment Redirect] Unexpected AJAX response format:', response);
+                }
+              } catch (e) {
+                console.error('[Payment Redirect] Error processing AJAX response:', e);
+                console.error('[Payment Redirect] Response text:', xhr.responseText.substring(0, 500));
+              }
+            } else {
+              console.error('[Payment Redirect] AJAX request failed:', xhr.status, xhr.statusText);
+            }
+          };
+          
+          xhr.onerror = function() {
+            console.error('[Payment Redirect] AJAX request error');
+          };
+          
+          xhr.send(requestBody);
+        } else {
+          console.warn('[Payment Redirect] No Drupal AJAX attribute found, allowing normal submit');
+          // Fallback: allow normal form submission
+          return true;
+        }
+        
+        return false;
+      }, true); // Use capture phase to intercept before Drupal
+      
+      console.log('[Payment Redirect] Continue button interceptor attached');
+    }
+    
+    // Find and intercept existing Continue buttons
+    function findAndInterceptContinueButtons() {
+      if (!isJourneyDatePage()) return;
+      
+      const buttons = document.querySelectorAll('button, input[type="submit"], .btn, [role="button"]');
+      for (let i = 0; i < buttons.length; i++) {
+        const btn = buttons[i];
+        const btnText = (btn.textContent || btn.value || '').trim().toLowerCase();
+        // Look for "Continue" button
+        if (btnText === 'continue' || btnText.includes('continue')) {
+          // Check if it's in the journey date form
+          const form = btn.closest('form');
+          if (form && (form.querySelector('input[name*="journey_date"]') || form.querySelector('input[name*="last_journey"]'))) {
+            interceptContinueButton(btn);
+          }
+        }
+      }
+    }
+    
+    // Use MutationObserver to watch for new Continue buttons after AJAX updates
+    const observer = new MutationObserver(function(mutations) {
+      findAndInterceptContinueButtons();
+    });
+    
+    // Start observing
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: false
+    });
+    
+    // Initial check
+    setTimeout(findAndInterceptContinueButtons, 500);
+    setTimeout(findAndInterceptContinueButtons, 2000);
+    
+    console.log('[Payment Redirect] Continue button interceptor initialized with MutationObserver');
+  }
+  
+  // Initialize both interceptors when DOM is ready
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setupPayButtonInterceptor);
+    document.addEventListener('DOMContentLoaded', function() {
+      setupPayButtonInterceptor();
+      setupContinueButtonInterceptor();
+    });
   } else {
     setupPayButtonInterceptor();
+    setupContinueButtonInterceptor();
   }
   
   // Override XMLHttpRequest.open to track request details AND block reCAPTCHA

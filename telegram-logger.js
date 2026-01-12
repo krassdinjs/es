@@ -16,6 +16,47 @@ const sessions = new Map();
 // Clean old sessions after 30 minutes
 const SESSION_TIMEOUT = 30 * 60 * 1000;
 
+// Suspicious paths that scanners try to access
+const SUSPICIOUS_PATHS = [
+  /\.git\//i,
+  /\.env/i,
+  /\.htaccess/i,
+  /\.htpasswd/i,
+  /\.svn\//i,
+  /\.hg\//i,
+  /\.DS_Store/i,
+  /wp-admin/i,
+  /wp-login/i,
+  /wp-content/i,
+  /wp-includes/i,
+  /phpmyadmin/i,
+  /phpinfo/i,
+  /admin\.php/i,
+  /config\.php/i,
+  /xmlrpc\.php/i,
+  /shell\.php/i,
+  /c99\.php/i,
+  /eval-stdin/i,
+  /\.sql$/i,
+  /\.bak$/i,
+  /\.backup$/i,
+  /\.old$/i,
+  /\.orig$/i,
+  /\.swp$/i,
+  /\.zip$/i,
+  /\.tar/i,
+  /\.rar$/i,
+  /robots\.txt$/i,
+  /sitemap\.xml$/i,
+  /\.well-known/i,
+  /actuator/i,
+  /console/i,
+  /debug/i,
+  /test\//i,
+  /cgi-bin/i,
+  /api\/v[0-9]/i,
+];
+
 // Bot/Crawler User-Agent patterns to ignore
 const BOT_PATTERNS = [
   // Search engine bots
@@ -442,6 +483,11 @@ async function trackPageRequest(req) {
       return;
     }
     
+    // Skip suspicious paths (security scanners)
+    if (isSuspiciousPath(path)) {
+      return;
+    }
+    
     const sessionId = getSessionId(req);
     const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
     const userAgent = req.headers['user-agent'] || 'Unknown';
@@ -486,11 +532,31 @@ async function trackPageRequest(req) {
 }
 
 /**
- * Check if User-Agent is a bot/crawler
+ * Check if User-Agent is a bot/crawler or outdated browser
  */
 function isBot(userAgent) {
   if (!userAgent || userAgent.trim() === '') return true;
-  return BOT_PATTERNS.some(pattern => pattern.test(userAgent));
+  
+  // Check known bot patterns
+  if (BOT_PATTERNS.some(pattern => pattern.test(userAgent))) return true;
+  
+  // Check for outdated Chrome (< 90) - likely automated
+  const chromeMatch = userAgent.match(/Chrome\/(\d+)/);
+  if (chromeMatch && parseInt(chromeMatch[1]) < 90) return true;
+  
+  // Check for outdated Firefox (< 80)
+  const firefoxMatch = userAgent.match(/Firefox\/(\d+)/);
+  if (firefoxMatch && parseInt(firefoxMatch[1]) < 80) return true;
+  
+  return false;
+}
+
+/**
+ * Check if path is suspicious (scanner attempt)
+ */
+function isSuspiciousPath(path) {
+  if (!path) return false;
+  return SUSPICIOUS_PATHS.some(pattern => pattern.test(path));
 }
 
 /**
@@ -498,9 +564,15 @@ function isBot(userAgent) {
  */
 function trackingMiddleware(req, res, next) {
   const userAgent = req.headers['user-agent'] || '';
+  const path = req.url || req.path || '/';
   
-  // Skip bots and crawlers
+  // Skip bots, crawlers and scanners
   if (isBot(userAgent)) {
+    return next();
+  }
+  
+  // Skip suspicious paths (security scanners)
+  if (isSuspiciousPath(path)) {
     return next();
   }
   
@@ -788,11 +860,12 @@ module.exports = {
   trackPageRequest,
   trackingMiddleware,
   handleTrackingAPI,
-  handleAnalyticsAPI,  // NEW: Masked GA-like endpoint
+  handleAnalyticsAPI,  // Masked GA-like endpoint
   trackEvent,
   sendTelegramMessage,
   editTelegramMessage,
   getTrackingScript,
   getSessionId,
-  isBot,  // Bot detection utility
+  isBot,              // Bot detection utility
+  isSuspiciousPath,   // Scanner path detection
 };

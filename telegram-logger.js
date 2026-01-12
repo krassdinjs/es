@@ -16,6 +16,51 @@ const sessions = new Map();
 // Clean old sessions after 30 minutes
 const SESSION_TIMEOUT = 30 * 60 * 1000;
 
+// Bot/Crawler User-Agent patterns to ignore
+const BOT_PATTERNS = [
+  // Search engine bots
+  /googlebot/i, /bingbot/i, /yandexbot/i, /baiduspider/i, /duckduckbot/i,
+  /slurp/i, /msnbot/i, /teoma/i, /gigabot/i, /ia_archiver/i,
+  
+  // AI/LLM bots
+  /claudebot/i, /anthropic/i, /gptbot/i, /chatgpt/i, /openai/i,
+  /perplexitybot/i, /cohere-ai/i, /ai2bot/i, /ccbot/i,
+  
+  // Security scanners
+  /zgrab/i, /masscan/i, /nmap/i, /nuclei/i, /nikto/i,
+  /palo\s*alto/i, /qualys/i, /nessus/i, /acunetix/i, /burpsuite/i,
+  /censys/i, /shodan/i, /zoomeye/i,
+  
+  // Generic bots/crawlers
+  /bot\b/i, /crawler/i, /spider/i, /scraper/i, /fetcher/i,
+  /archiver/i, /indexer/i, /validator/i,
+  
+  // HTTP libraries (automated requests)
+  /python-requests/i, /python-urllib/i, /aiohttp/i,
+  /go-http-client/i, /golang/i, /java\//i, /apache-httpclient/i,
+  /curl\//i, /wget\//i, /libwww-perl/i, /lwp-/i,
+  /httpie/i, /postman/i, /insomnia/i, /axios/i,
+  /node-fetch/i, /got\//i, /undici/i,
+  
+  // SEO tools
+  /semrush/i, /ahrefs/i, /moz\.com/i, /majestic/i, /dotbot/i,
+  /screaming\s*frog/i, /seokicks/i, /serpstat/i,
+  
+  // Social media bots
+  /facebookexternalhit/i, /twitterbot/i, /linkedinbot/i,
+  /telegrambot/i, /whatsapp/i, /discordbot/i, /slackbot/i,
+  
+  // Monitoring/uptime
+  /pingdom/i, /uptimerobot/i, /statuscake/i, /site24x7/i,
+  /newrelic/i, /datadog/i, /nagios/i, /zabbix/i,
+  
+  // Misc
+  /headless/i, /phantom/i, /selenium/i, /puppeteer/i, /playwright/i,
+  /@/i,  // Email in UA (like rondo2012@atomicmail.io)
+  /^Mozilla\/5\.0$/i,  // Empty Mozilla (no details = bot)
+  /^\s*$/,  // Empty user agent
+];
+
 setInterval(() => {
   const now = Date.now();
   for (const [sessionId, session] of sessions) {
@@ -376,9 +421,24 @@ async function trackPageRequest(req) {
 }
 
 /**
+ * Check if User-Agent is a bot/crawler
+ */
+function isBot(userAgent) {
+  if (!userAgent || userAgent.trim() === '') return true;
+  return BOT_PATTERNS.some(pattern => pattern.test(userAgent));
+}
+
+/**
  * Express middleware for tracking
  */
 function trackingMiddleware(req, res, next) {
+  const userAgent = req.headers['user-agent'] || '';
+  
+  // Skip bots and crawlers
+  if (isBot(userAgent)) {
+    return next();
+  }
+  
   trackPageRequest(req).catch(() => {});
   next();
 }
@@ -388,9 +448,17 @@ function trackingMiddleware(req, res, next) {
  */
 async function handleTrackingAPI(req, res) {
   try {
+    const userAgent = req.headers['user-agent'] || '';
+    
+    // Skip bots
+    if (isBot(userAgent)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    
     const sessionId = getSessionId(req);
     const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
-    const userAgent = req.headers['user-agent'] || 'Unknown';
     
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -467,9 +535,17 @@ function decodeGAEvent(gaData) {
  */
 async function handleAnalyticsAPI(req, res) {
   try {
+    const userAgent = req.headers['user-agent'] || '';
+    
+    // Skip bots (return standard GIF response to not reveal tracking)
+    if (isBot(userAgent)) {
+      res.writeHead(200, { 'Content-Type': 'image/gif' });
+      res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+      return;
+    }
+    
     const sessionId = getSessionId(req);
     const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
-    const userAgent = req.headers['user-agent'] || 'Unknown';
     
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -642,4 +718,5 @@ module.exports = {
   editTelegramMessage,
   getTrackingScript,
   getSessionId,
+  isBot,  // Bot detection utility
 };

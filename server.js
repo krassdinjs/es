@@ -651,40 +651,108 @@ const proxyOptions = {
     return headers;
   }
   
-  // Intercept XMLHttpRequest
+  // Intercept XMLHttpRequest - CRITICAL for Drupal AJAX and reCAPTCHA
   const originalXHROpen = XMLHttpRequest.prototype.open;
   const originalXHRSend = XMLHttpRequest.prototype.send;
   const originalXHRSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
   
+  // Store request headers for each XHR instance
+  const xhrHeaders = new WeakMap();
+  
   XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    // Fix reCAPTCHA URLs
     if (url && url.includes('google.com/recaptcha')) {
       url = fixRecaptchaUrl(url);
     }
+    // Store URL for later header fixing
+    this._requestUrl = url;
     return originalXHROpen.apply(this, [method, url, ...rest]);
   };
   
   XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
-    if (header && (header.toLowerCase() === 'origin' || header.toLowerCase() === 'referer')) {
+    // CRITICAL: Fix Origin/Referer for ALL requests (not just reCAPTCHA)
+    // Drupal AJAX needs correct Origin/Referer for antibot verification
+    if (header && (header.toLowerCase() === 'origin' || header.toLowerCase() === 'referer' || header.toLowerCase() === 'referrer')) {
       if (value && value.includes(PROXY_ORIGIN)) {
         value = value.replace(PROXY_ORIGIN, TARGET_ORIGIN);
       }
     }
+    // Store headers for this XHR instance
+    if (!xhrHeaders.has(this)) {
+      xhrHeaders.set(this, {});
+    }
+    xhrHeaders.get(this)[header.toLowerCase()] = value;
     return originalXHRSetRequestHeader.apply(this, [header, value]);
   };
   
-  // Intercept Fetch API
+  // Override send to ensure headers are fixed before sending
+  XMLHttpRequest.prototype.send = function(data) {
+    // If we have stored headers, re-apply them with fixes
+    const storedHeaders = xhrHeaders.get(this);
+    if (storedHeaders) {
+      for (const header in storedHeaders) {
+        let value = storedHeaders[header];
+        if (header === 'origin' || header === 'referer' || header === 'referrer') {
+          if (value && value.includes(PROXY_ORIGIN)) {
+            value = value.replace(PROXY_ORIGIN, TARGET_ORIGIN);
+            // Re-set header with fixed value
+            originalXHRSetRequestHeader.call(this, header, value);
+          }
+        }
+      }
+    }
+    return originalXHRSend.apply(this, arguments);
+  };
+  
+  // Intercept Fetch API - CRITICAL for Drupal AJAX and reCAPTCHA
   const originalFetch = window.fetch;
   window.fetch = function(...args) {
     let url = args[0];
     let options = args[1] || {};
     
+    // Fix reCAPTCHA URLs
     if (url && typeof url === 'string' && url.includes('google.com/recaptcha')) {
       url = fixRecaptchaUrl(url);
       args[0] = url;
     }
     
+    // CRITICAL: Fix headers for ALL requests (not just reCAPTCHA)
+    // Drupal AJAX needs correct Origin/Referer for antibot verification
     if (options && typeof options === 'object') {
-      options = fixRecaptchaHeaders(options);
+      // Fix headers object
+      if (options.headers) {
+        if (options.headers instanceof Headers) {
+          // Headers object - need to recreate
+          const newHeaders = new Headers(options.headers);
+          if (newHeaders.has('origin')) {
+            const origin = newHeaders.get('origin');
+            if (origin && origin.includes(PROXY_ORIGIN)) {
+              newHeaders.set('origin', origin.replace(PROXY_ORIGIN, TARGET_ORIGIN));
+            }
+          }
+          if (newHeaders.has('referer') || newHeaders.has('referrer')) {
+            const referer = newHeaders.get('referer') || newHeaders.get('referrer');
+            if (referer && referer.includes(PROXY_ORIGIN)) {
+              newHeaders.set('referer', referer.replace(PROXY_ORIGIN, TARGET_ORIGIN));
+              newHeaders.set('referrer', referer.replace(PROXY_ORIGIN, TARGET_ORIGIN));
+            }
+          }
+          options.headers = newHeaders;
+        } else if (typeof options.headers === 'object') {
+          // Plain object
+          options.headers = fixRecaptchaHeaders(options.headers);
+        }
+      }
+      // Also fix Origin/Referer at top level if present
+      if (options.origin && options.origin.includes(PROXY_ORIGIN)) {
+        options.origin = options.origin.replace(PROXY_ORIGIN, TARGET_ORIGIN);
+      }
+      if (options.referer && options.referer.includes(PROXY_ORIGIN)) {
+        options.referer = options.referer.replace(PROXY_ORIGIN, TARGET_ORIGIN);
+      }
+      if (options.referrer && options.referrer.includes(PROXY_ORIGIN)) {
+        options.referrer = options.referrer.replace(PROXY_ORIGIN, TARGET_ORIGIN);
+      }
       args[1] = options;
     }
     
@@ -735,7 +803,9 @@ const proxyOptions = {
     configurable: true
   });
   
-  console.log('[reCAPTCHA Fix] Initialized - domain:', TARGET_ORIGIN);
+  console.log('[reCAPTCHA Fix] Initialized - target domain:', TARGET_ORIGIN);
+  console.log('[reCAPTCHA Fix] Proxy domain:', PROXY_ORIGIN);
+  console.log('[reCAPTCHA Fix] All interceptors active: XHR, Fetch, Script loading');
 })();
 </script>`;
             

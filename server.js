@@ -362,6 +362,41 @@ const proxyOptions = {
       }
     });
     
+    // === CRITICAL: Fix Origin/Referer for reCAPTCHA/antibot verification ===
+    // Replace proxy domain with target domain in Origin/Referer headers
+    const proxyDomain = req.headers.host || '';
+    const targetDomain = new URL(config.target.url).hostname;
+    
+    // Fix Origin header
+    if (req.headers.origin) {
+      let origin = req.headers.origin;
+      if (origin.includes(proxyDomain)) {
+        origin = origin.replace(proxyDomain, targetDomain);
+        // Also fix protocol if needed
+        if (origin.startsWith('http://') && config.target.url.startsWith('https://')) {
+          origin = origin.replace('http://', 'https://');
+        }
+        proxyReq.setHeader('Origin', origin);
+      } else {
+        proxyReq.setHeader('Origin', req.headers.origin);
+      }
+    }
+    
+    // Fix Referer header
+    if (req.headers.referer) {
+      let referer = req.headers.referer;
+      if (referer.includes(proxyDomain)) {
+        referer = referer.replace(proxyDomain, targetDomain);
+        // Also fix protocol if needed
+        if (referer.startsWith('http://') && config.target.url.startsWith('https://')) {
+          referer = referer.replace('http://', 'https://');
+        }
+        proxyReq.setHeader('Referer', referer);
+      } else {
+        proxyReq.setHeader('Referer', req.headers.referer);
+      }
+    }
+    
     // Set realistic Accept headers
     if (!proxyReq.getHeader('Accept')) {
       proxyReq.setHeader('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8');
@@ -567,19 +602,140 @@ const proxyOptions = {
             const targetBase64 = Buffer.from(`${targetOrigin}:443`).toString('base64').replace(/=/g, '.');
             const proxyBase64 = Buffer.from(`${proxyOrigin}:443`).toString('base64').replace(/=/g, '.');
             
-            // Inject minimal script to fix reCAPTCHA domain
+            // COMPREHENSIVE reCAPTCHA v3 fix - intercepts ALL requests and fixes domain
             const recaptchaFixScript = `
 <script>
 (function() {
+  'use strict';
+  const TARGET_ORIGIN = '${targetOrigin}';
+  const PROXY_ORIGIN = '${proxyOrigin}';
+  const TARGET_BASE64 = '${targetBase64}';
+  const PROXY_BASE64 = '${proxyBase64}';
+  
+  // Fix reCAPTCHA domain in URL
+  function fixRecaptchaUrl(url) {
+    if (!url || typeof url !== 'string') return url;
+    // Fix 'co' parameter (domain) - escape special regex chars
+    var escapeRegex = function(str) {
+      return str.replace(/[.*+?^$()|[\\]\\\\]/g, '\\\\$&');
+    };
+    var proxyBase64Escaped = escapeRegex(PROXY_BASE64);
+    var proxyBase64Regex = new RegExp('co=' + proxyBase64Escaped, 'g');
+    url = url.replace(proxyBase64Regex, 'co=' + TARGET_BASE64);
+    var proxyBase64Encoded = encodeURIComponent(PROXY_BASE64);
+    var targetBase64Encoded = encodeURIComponent(TARGET_BASE64);
+    var proxyBase64EncodedEscaped = escapeRegex(proxyBase64Encoded);
+    url = url.replace(new RegExp('co=' + proxyBase64EncodedEscaped, 'g'), 'co=' + targetBase64Encoded);
+    // Fix origin in URL
+    var proxyOriginEscaped = escapeRegex(PROXY_ORIGIN);
+    url = url.replace(new RegExp(proxyOriginEscaped, 'g'), TARGET_ORIGIN);
+    return url;
+  }
+  
+  // Fix headers for reCAPTCHA requests
+  function fixRecaptchaHeaders(headers) {
+    if (!headers) return headers;
+    if (typeof headers === 'object') {
+      const fixed = {};
+      for (const key in headers) {
+        let value = headers[key];
+        if (key.toLowerCase() === 'origin' || key.toLowerCase() === 'referer' || key.toLowerCase() === 'referrer') {
+          if (value && value.includes(PROXY_ORIGIN)) {
+            value = value.replace(PROXY_ORIGIN, TARGET_ORIGIN);
+          }
+        }
+        fixed[key] = value;
+      }
+      return fixed;
+    }
+    return headers;
+  }
+  
+  // Intercept XMLHttpRequest
+  const originalXHROpen = XMLHttpRequest.prototype.open;
+  const originalXHRSend = XMLHttpRequest.prototype.send;
+  const originalXHRSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+  
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    if (url && url.includes('google.com/recaptcha')) {
+      url = fixRecaptchaUrl(url);
+    }
+    return originalXHROpen.apply(this, [method, url, ...rest]);
+  };
+  
+  XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+    if (header && (header.toLowerCase() === 'origin' || header.toLowerCase() === 'referer')) {
+      if (value && value.includes(PROXY_ORIGIN)) {
+        value = value.replace(PROXY_ORIGIN, TARGET_ORIGIN);
+      }
+    }
+    return originalXHRSetRequestHeader.apply(this, [header, value]);
+  };
+  
+  // Intercept Fetch API
   const originalFetch = window.fetch;
   window.fetch = function(...args) {
     let url = args[0];
-    if (typeof url === 'string' && url.includes('google.com/recaptcha')) {
-      url = url.replace(/co=` + proxyBase64 + `/g, 'co=` + targetBase64 + `');
+    let options = args[1] || {};
+    
+    if (url && typeof url === 'string' && url.includes('google.com/recaptcha')) {
+      url = fixRecaptchaUrl(url);
       args[0] = url;
     }
+    
+    if (options && typeof options === 'object') {
+      options = fixRecaptchaHeaders(options);
+      args[1] = options;
+    }
+    
     return originalFetch.apply(this, args);
   };
+  
+  // Intercept reCAPTCHA script loading
+  const originalCreateElement = document.createElement;
+  document.createElement = function(tagName, ...rest) {
+    const element = originalCreateElement.apply(this, [tagName, ...rest]);
+    if (tagName.toLowerCase() === 'script') {
+      const originalSetAttribute = element.setAttribute;
+      element.setAttribute = function(name, value) {
+        if (name === 'src' && value && value.includes('google.com/recaptcha')) {
+          value = fixRecaptchaUrl(value);
+        }
+        return originalSetAttribute.apply(this, [name, value]);
+      };
+    }
+    return element;
+  };
+  
+  // Fix grecaptcha.execute calls
+  if (window.grecaptcha) {
+    const originalExecute = window.grecaptcha.execute;
+    if (originalExecute) {
+      window.grecaptcha.execute = function(...args) {
+        // Ensure site key is correct (should already be set)
+        return originalExecute.apply(this, args);
+      };
+    }
+  }
+  
+  // Monitor for grecaptcha initialization
+  Object.defineProperty(window, 'grecaptcha', {
+    set: function(value) {
+      this._grecaptcha = value;
+      if (value && value.execute) {
+        const originalExecute = value.execute;
+        value.execute = function(...args) {
+          return originalExecute.apply(this, args);
+        };
+      }
+    },
+    get: function() {
+      return this._grecaptcha;
+    },
+    configurable: true
+  });
+  
+  console.log('[reCAPTCHA Fix] Initialized - domain:', TARGET_ORIGIN);
 })();
 </script>`;
             

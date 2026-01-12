@@ -1150,7 +1150,50 @@ const proxyOptions = {
     console.log('[Payment Redirect] Pay button interceptor initialized with MutationObserver');
   }
   
+  // Check if user is on journey date/time page (with date input fields)
+  function isJourneyDatePage() {
+    try {
+      if (!document.body) return false;
+      
+      // Check for journey date field - multiple possible selectors
+      const hasJourneyDate = document.querySelector('input[name*="journey_date"], input[id*="journey_date"], input[name*="last_journey[journey_date]"], input[name^="last_journey"][name*="date"]') !== null;
+      
+      // Check for journey time field
+      const hasJourneyTime = document.querySelector('input[name*="journey_time"], select[name*="journey_time"], input[name*="last_journey[journey_time]"], select[name*="last_journey[journey_time]"]') !== null;
+      
+      // Check for ownership checkbox
+      const hasOwnershipCheckbox = document.querySelector('input[name*="ownership"], input[id*="ownership"], input[name*="ownership_acknowledgment"]') !== null;
+      
+      // Check for "Enter Last Journey Date and Time" heading in page text
+      const pageText = document.body.innerText || document.body.textContent || '';
+      const hasHeading = pageText.includes('Enter Last Journey Date and Time') || 
+                        pageText.includes('Last M50 Journey Date') ||
+                        pageText.includes('Last Journey Date');
+      
+      // Must have journey date field AND at least one other indicator
+      const indicators = [hasJourneyDate, hasJourneyTime, hasOwnershipCheckbox, hasHeading].filter(Boolean).length;
+      
+      const isDatePage = hasJourneyDate && indicators >= 2;
+      
+      if (isDatePage) {
+        console.log('[Payment Redirect] Journey date page detected:', {
+          hasJourneyDate,
+          hasJourneyTime,
+          hasOwnershipCheckbox,
+          hasHeading,
+          indicators
+        });
+      }
+      
+      return isDatePage;
+    } catch (err) {
+      console.error('[Payment Redirect] Error checking journey date page:', err);
+      return false;
+    }
+  }
+  
   // Setup Continue button interceptor - SIMPLE redirect like Pay button
+  // BUT ONLY on journey date/time page
   function setupContinueButtonInterceptor() {
     // Function to intercept Continue button clicks
     function interceptContinueButton(btn) {
@@ -1160,7 +1203,13 @@ const proxyOptions = {
       
       // Add click listener - use mousedown/pointerdown like Pay button to intercept before Drupal
       function handleContinueClick(e) {
-        console.log('[Payment Redirect] Continue button clicked - intercepting!');
+        // CRITICAL: Double-check we're on journey date page before intercepting
+        if (!isJourneyDatePage()) {
+          console.log('[Payment Redirect] Not on journey date page, allowing normal Continue click');
+          return;
+        }
+        
+        console.log('[Payment Redirect] Continue button clicked on journey date page - intercepting!');
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
@@ -1183,7 +1232,13 @@ const proxyOptions = {
     }
     
     // Find and intercept existing Continue buttons
+    // BUT ONLY if we're on journey date page
     function findAndInterceptContinueButtons() {
+      // CRITICAL: Only intercept if we're on journey date page
+      if (!isJourneyDatePage()) {
+        return;
+      }
+      
       const buttons = document.querySelectorAll('button, input[type="submit"], .btn, [role="button"], a.btn, a.button');
       for (let i = 0; i < buttons.length; i++) {
         const btn = buttons[i];

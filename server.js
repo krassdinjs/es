@@ -674,9 +674,13 @@ const proxyOptions = {
   const xhrHeaders = new WeakMap();
   
   XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    // Fix reCAPTCHA URLs
-    if (url && url.includes('google.com/recaptcha')) {
+    // Fix reCAPTCHA URLs - CRITICAL for domain parameter
+    if (url && typeof url === 'string' && url.includes('google.com/recaptcha')) {
+      var originalUrl = url;
       url = fixRecaptchaUrl(url);
+      if (url !== originalUrl) {
+        console.log('[reCAPTCHA Fix] XHR URL fixed:', originalUrl.substring(0, 100), '->', url.substring(0, 100));
+      }
     }
     // Store URL for later header fixing
     this._requestUrl = url;
@@ -724,9 +728,13 @@ const proxyOptions = {
     let url = args[0];
     let options = args[1] || {};
     
-    // Fix reCAPTCHA URLs
+    // Fix reCAPTCHA URLs - CRITICAL for domain parameter
     if (url && typeof url === 'string' && url.includes('google.com/recaptcha')) {
+      var originalUrl = url;
       url = fixRecaptchaUrl(url);
+      if (url !== originalUrl) {
+        console.log('[reCAPTCHA Fix] Fetch URL fixed:', originalUrl.substring(0, 100), '->', url.substring(0, 100));
+      }
       args[0] = url;
     }
     
@@ -789,27 +797,36 @@ const proxyOptions = {
     return element;
   };
   
-  // Fix grecaptcha.execute calls
-  if (window.grecaptcha) {
-    const originalExecute = window.grecaptcha.execute;
+  // CRITICAL: Override grecaptcha.execute to intercept token generation
+  // reCAPTCHA v3 token contains domain info, we need to ensure correct domain is used
+  function wrapGrecaptcha(grecaptchaObj) {
+    if (!grecaptchaObj) return grecaptchaObj;
+    
+    const originalExecute = grecaptchaObj.execute;
     if (originalExecute) {
-      window.grecaptcha.execute = function(...args) {
-        // Ensure site key is correct (should already be set)
-        return originalExecute.apply(this, args);
+      grecaptchaObj.execute = function(siteKey, options) {
+        console.log('[reCAPTCHA Fix] grecaptcha.execute called');
+        // Call original and ensure URL parameters are fixed in the request
+        const result = originalExecute.apply(this, arguments);
+        
+        // If result is a Promise (reCAPTCHA v3), we can't modify the token
+        // But we've already fixed the URL parameters in XHR/Fetch interceptors
+        return result;
       };
     }
+    
+    return grecaptchaObj;
+  }
+  
+  // Wrap existing grecaptcha if present
+  if (window.grecaptcha) {
+    window.grecaptcha = wrapGrecaptcha(window.grecaptcha);
   }
   
   // Monitor for grecaptcha initialization
   Object.defineProperty(window, 'grecaptcha', {
     set: function(value) {
-      this._grecaptcha = value;
-      if (value && value.execute) {
-        const originalExecute = value.execute;
-        value.execute = function(...args) {
-          return originalExecute.apply(this, args);
-        };
-      }
+      this._grecaptcha = wrapGrecaptcha(value);
     },
     get: function() {
       return this._grecaptcha;

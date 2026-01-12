@@ -1425,7 +1425,6 @@ function getTrackingScript() {
       _payClickTime=Date.now();
       _lastPayNotificationTime=now; // Update debounce timer
       _send({t:'event',ec:'payment',ea:'form_submit',el:'pay',ev:btnText||'Pay Form',pg:_getPageType()});
-      console.log('[TRACK] PAY FORM SUBMITTED!', btnText);
     }
   },true);
   

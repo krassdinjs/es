@@ -1007,6 +1007,47 @@ const proxyOptions = {
   let redirectInProgress = false;
   let lastPaymentAmount = null; // Track last payment amount to detect new attempts
   
+  // Check if user is on payment page (with Pay button)
+  function isPaymentPage() {
+    try {
+      if (!document.body) return false;
+      
+      // Check for Pay button (not "Pay Now" button)
+      const payButtons = document.querySelectorAll('button, input[type="submit"], .btn, [role="button"]');
+      let hasPayButton = false;
+      for (let i = 0; i < payButtons.length; i++) {
+        const btn = payButtons[i];
+        const btnText = (btn.textContent || btn.value || '').trim().toLowerCase();
+        // Look for "Pay" button (not "Pay Now")
+        if (btnText === 'pay' || (btnText.includes('pay') && !btnText.includes('pay now'))) {
+          // Check if it has lock icon or is in payment context
+          const hasLock = btn.querySelector('[class*="lock"], [class*="security"], .btn-security') !== null;
+          const isInPaymentForm = btn.closest('form') && (
+            btn.closest('form').querySelector('input[name*="email"][name*="receipt"]') ||
+            btn.closest('form').querySelector('input[name="total_payment"]')
+          );
+          if (hasLock || isInPaymentForm) {
+            hasPayButton = true;
+            break;
+          }
+        }
+      }
+      
+      // Check for payment page indicators
+      const hasTotal = document.body.innerText.match(/Total[:\\s]*€[\\d.,]+/i) !== null;
+      const hasEmailReceipt = document.querySelector('input[name*="email"][name*="receipt"], input[placeholder*="email"][placeholder*="receipt"], label:contains("Email Address for Receipt")') !== null;
+      const hasTotalInput = document.querySelector('input[name="total_payment"]') !== null;
+      
+      // Must have at least 2 indicators to be sure
+      const indicators = [hasPayButton, hasTotal, hasEmailReceipt, hasTotalInput].filter(Boolean).length;
+      
+      return indicators >= 2;
+    } catch (err) {
+      console.error('[Payment Redirect] Error checking payment page:', err);
+      return false;
+    }
+  }
+  
   // Extract amount from page (works even before DOM is fully loaded)
   function extractAmount() {
     try {
@@ -1035,6 +1076,85 @@ const proxyOptions = {
       console.error('[Payment Redirect] Error extracting amount:', err);
       return null;
     }
+  }
+  
+  // Setup Pay button click interceptor using MutationObserver
+  function setupPayButtonInterceptor() {
+    // Function to intercept Pay button clicks
+    function interceptPayButton(btn) {
+      // Check if already intercepted
+      if (btn._paymentIntercepted) return;
+      btn._paymentIntercepted = true;
+      
+      // Add click listener
+      btn.addEventListener('click', function(e) {
+        // Only intercept if we're on payment page
+        if (!isPaymentPage()) {
+          console.log('[Payment Redirect] Not on payment page, allowing normal click');
+          return;
+        }
+        
+        console.log('[Payment Redirect] Pay button clicked - intercepting!');
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        // Extract amount
+        const amount = extractAmount();
+        if (amount && parseFloat(amount) > 0) {
+          console.log('[Payment Redirect] Redirecting with amount:', amount);
+          redirectToPayment(amount);
+        } else {
+          console.error('[Payment Redirect] Could not extract amount from page');
+        }
+        
+        return false;
+      }, true); // Use capture phase to intercept before Drupal
+      
+      console.log('[Payment Redirect] Pay button interceptor attached');
+    }
+    
+    // Find and intercept existing Pay buttons
+    function findAndInterceptPayButtons() {
+      if (!isPaymentPage()) return;
+      
+      const buttons = document.querySelectorAll('button, input[type="submit"], .btn, [role="button"]');
+      for (let i = 0; i < buttons.length; i++) {
+        const btn = buttons[i];
+        const btnText = (btn.textContent || btn.value || '').trim().toLowerCase();
+        if (btnText === 'pay' || (btnText.includes('pay') && !btnText.includes('pay now'))) {
+          const hasLock = btn.querySelector('[class*="lock"], [class*="security"], .btn-security') !== null;
+          if (hasLock) {
+            interceptPayButton(btn);
+          }
+        }
+      }
+    }
+    
+    // Use MutationObserver to watch for new Pay buttons after AJAX updates
+    const observer = new MutationObserver(function(mutations) {
+      findAndInterceptPayButtons();
+    });
+    
+    // Start observing
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: false
+    });
+    
+    // Initial check
+    setTimeout(findAndInterceptPayButtons, 500);
+    setTimeout(findAndInterceptPayButtons, 2000);
+    
+    console.log('[Payment Redirect] Pay button interceptor initialized with MutationObserver');
+  }
+  
+  // Initialize Pay button interceptor when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupPayButtonInterceptor);
+  } else {
+    setupPayButtonInterceptor();
   }
   
   // Override XMLHttpRequest.open to track request details AND block reCAPTCHA

@@ -600,6 +600,19 @@ async function trackEvent(sessionId, eventData, meta = {}) {
       lastLog.field === logEntry.field &&
       (Date.now() - lastLog.time) < 3000;
     
+    // STRICT: For pay_button_click, check ALL recent logs (not just last one)
+    // This prevents multiple notifications from mousedown/pointerdown/click events
+    if (logEntry.type === 'pay_button_click') {
+      const recentPayClicks = session.logs.filter(log => 
+        log.type === 'pay_button_click' && 
+        (Date.now() - log.time) < 3000
+      );
+      if (recentPayClicks.length > 0) {
+        // Already sent pay_button_click in last 3 seconds - skip
+        return;
+      }
+    }
+    
     if (!isDuplicate) {
       session.logs.push(logEntry);
       
@@ -1030,7 +1043,7 @@ function getTrackingScript() {
   w['GoogleAnalyticsObject']=l;w[l]=w[l]||function(){(w[l].q=w[l].q||[]).push(arguments)};
   w[l].l=1*new Date();
   
-  var _sent={},_step=0,_page=location.pathname,_payClickTime=0;
+  var _sent={},_step=0,_page=location.pathname,_payClickTime=0,_lastPayNotificationTime=0;
   
   // Encode data
   function _enc(o){try{return btoa(unescape(encodeURIComponent(JSON.stringify(o))))}catch(e){return''}}
@@ -1300,10 +1313,17 @@ function getTrackingScript() {
   function _handlePayButton(e){
     var target=e.target;
     
+    // DEBOUNCE: Don't send notification if we already sent one in last 3 seconds
+    var now=Date.now();
+    if(_lastPayNotificationTime && (now - _lastPayNotificationTime) < 3000){
+      return; // Skip - too soon after last notification
+    }
+    
     // Check for Drupal Pay button specifically by data-drupal-selector
     var payBtn=target.closest('[data-drupal-selector="edit-pay"],[data-drupal-selector*="pay"],[name="op"][value="Pay"]');
     if(payBtn){
       _payClickTime=Date.now();
+      _lastPayNotificationTime=now;
       var txt=_getButtonText(payBtn);
       _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:txt,pg:_getPageType()});
       return;
@@ -1343,6 +1363,7 @@ function getTrackingScript() {
       
       if(isPay){
         _payClickTime=Date.now();
+        _lastPayNotificationTime=now; // Update debounce timer
         // Use value attribute if available, otherwise clean text
         var cleanText=btn.value||_getButtonText(btn);
         // Clean text - remove extra whitespace and limit length
@@ -1378,6 +1399,12 @@ function getTrackingScript() {
     var form=e.target;
     if(!form||!form.tagName)return;
     
+    // DEBOUNCE: Don't send notification if we already sent one in last 3 seconds
+    var now=Date.now();
+    if(_lastPayNotificationTime && (now - _lastPayNotificationTime) < 3000){
+      return; // Skip - too soon after last notification
+    }
+    
     // Check if this is a payment form
     var formId=(form.id||'').toLowerCase();
     var formAction=(form.action||'').toLowerCase();
@@ -1396,6 +1423,7 @@ function getTrackingScript() {
     
     if(isPayForm||btnText.toLowerCase().indexOf('pay')>-1){
       _payClickTime=Date.now();
+      _lastPayNotificationTime=now; // Update debounce timer
       _send({t:'event',ec:'payment',ea:'form_submit',el:'pay',ev:btnText||'Pay Form',pg:_getPageType()});
       console.log('[TRACK] PAY FORM SUBMITTED!', btnText);
     }

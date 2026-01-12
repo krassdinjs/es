@@ -277,17 +277,27 @@ const proxyOptions = {
   // CRITICAL: Self-handle response to use responseInterceptor
   selfHandleResponse: true,
   
-  // Forward cookies and sessions
+  // CRITICAL: Forward cookies and sessions with domain rewriting
+  // This allows users to authenticate through the proxy
   cookieDomainRewrite: {
-    '*': '',
+    'eflow.ie': '',           // Remove domain restriction
+    '.eflow.ie': '',          // Remove subdomain restriction
+    'www.eflow.ie': '',       // Remove www domain restriction
+    '*': '',                  // Fallback: remove all domain restrictions
   },
   cookiePathRewrite: {
-    '*': '/',
+    '*': '/',                 // Ensure cookies work on all paths
   },
   
-  // Auto-rewrite redirects
+  // Auto-rewrite redirects (Location headers)
   autoRewrite: true,
   followRedirects: true,
+  
+  // Rewrite host in redirect headers
+  hostRewrite: true,
+  
+  // Rewrite protocol in redirect headers
+  protocolRewrite: 'https',
   
   // Preserve host header for proper routing
   preserveHeaderKeyCase: true,
@@ -422,24 +432,34 @@ const proxyOptions = {
         logger.debug(`Cached response for ${req.url}`);
       }
       
-      // Handle cookies - rewrite domain if custom domain is set
+      // CRITICAL: Handle cookies - rewrite domain for authentication to work
       if (proxyRes.headers['set-cookie']) {
+        const proxyHost = req.get('host'); // Current proxy domain (efllows-m50.com)
+        const targetDomain = new URL(config.target.url).hostname; // eflow.ie
+        
         const cookies = proxyRes.headers['set-cookie'].map((cookie) => {
           let modifiedCookie = cookie;
           
-          // Remove Secure flag for local development
+          // 1. Remove ALL domain restrictions to make cookies work on proxy
+          modifiedCookie = modifiedCookie.replace(/;\s*Domain=[^;]*/gi, '');
+          
+          // 2. Change SameSite from Strict/Lax to None (required for cross-origin)
+          // Or remove it entirely if causing issues
+          modifiedCookie = modifiedCookie.replace(/;\s*SameSite=Strict/gi, '; SameSite=Lax');
+          modifiedCookie = modifiedCookie.replace(/;\s*SameSite=None/gi, '; SameSite=Lax');
+          
+          // 3. Remove Secure flag for local development (HTTP)
           if (req.protocol === 'http') {
             modifiedCookie = modifiedCookie.replace(/;\s*Secure/gi, '');
           }
           
-          // Rewrite domain if custom domain is set
-          if (config.customDomain) {
-            const targetDomain = new URL(config.target.url).hostname;
-            modifiedCookie = modifiedCookie.replace(
-              new RegExp(`Domain=${targetDomain}`, 'gi'),
-              `Domain=${config.customDomain}`
-            );
+          // 4. Ensure Path is set to root
+          if (!modifiedCookie.includes('Path=')) {
+            modifiedCookie += '; Path=/';
           }
+          
+          logger.debug(`[Cookie Rewrite] Original: ${cookie.substring(0, 100)}...`);
+          logger.debug(`[Cookie Rewrite] Modified: ${modifiedCookie.substring(0, 100)}...`);
           
           return modifiedCookie;
         });

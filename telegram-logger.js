@@ -1251,43 +1251,60 @@ function getTrackingScript() {
     }
   },true);
   
-  // Track button clicks - IMPROVED for Pay button detection
-  d.addEventListener('click',function(e){
-    var btn=e.target.closest('button,input[type="submit"],.btn,[role="button"],a.btn,a.button,.form-submit');
+  // CRITICAL: Track PAY button using MOUSEDOWN - fires BEFORE Drupal AJAX intercepts click
+  // Drupal uses stopImmediatePropagation() on click, so we use mousedown instead
+  function _handlePayButton(e){
+    var target=e.target;
+    
+    // Check for Drupal Pay button specifically by data-drupal-selector
+    var payBtn=target.closest('[data-drupal-selector="edit-pay"],[data-drupal-selector*="pay"],[name="op"][value="Pay"]');
+    if(payBtn){
+      _payClickTime=Date.now();
+      var txt=(payBtn.textContent||payBtn.value||'Pay').replace(/[\\s\\n\\r\\t]+/g,' ').trim();
+      _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:txt||'Pay',pg:_getPageType()});
+      console.log('[TRACK] DRUPAL PAY BUTTON DETECTED!', txt);
+      return;
+    }
+    
+    // Also check for generic Pay buttons
+    var btn=target.closest('button,input[type="submit"],.btn,[role="button"],a.btn,a.button,.form-submit,.btn-pay-trips');
     if(btn){
-      // Get button text - clean up whitespace and icons
       var txt=btn.textContent||btn.value||btn.innerText||'';
       txt=txt.replace(/[\\s\\n\\r\\t]+/g,' ').trim().substring(0,50);
       
-      // Also check aria-label, title, or data attributes
-      if(!txt||txt.length<2){
-        txt=btn.getAttribute('aria-label')||btn.getAttribute('title')||btn.getAttribute('data-text')||btn.className||'button';
-      }
+      // Check button attributes
+      var btnId=(btn.id||'').toLowerCase();
+      var btnClass=(btn.className||'').toLowerCase();
+      var btnValue=(btn.value||'').toLowerCase();
+      var btnName=(btn.name||'').toLowerCase();
       
-      // Detect PAY button specifically (important action!)
+      // Detect PAY button - check multiple attributes
       var isPay=false;
-      var btnText=txt.toLowerCase();
-      if(btnText.indexOf('pay')>-1||btnText.indexOf('submit')>-1||btnText.indexOf('continue')>-1||btnText.indexOf('next')>-1||btnText.indexOf('proceed')>-1){
-        isPay=true;
-      }
-      // Also check if button is in payment form
-      var form=btn.closest('form');
-      if(form&&(form.id.indexOf('pay')>-1||form.action.indexOf('pay')>-1||form.className.indexOf('pay')>-1)){
-        isPay=true;
-      }
+      if(txt.toLowerCase().indexOf('pay')>-1){isPay=true;}
+      if(btnId.indexOf('pay')>-1){isPay=true;}
+      if(btnClass.indexOf('pay')>-1||btnClass.indexOf('btn-pay')>-1){isPay=true;}
+      if(btnValue.indexOf('pay')>-1){isPay=true;}
+      if(btnName==='op'&&btnValue==='pay'){isPay=true;}
       
       if(isPay){
-        // Set flag to block step detection for 3 seconds
         _payClickTime=Date.now();
-        // Send special PAY BUTTON event - HIGH PRIORITY - IMMEDIATELY
         _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:txt||'Pay',pg:_getPageType()});
-        console.log('[TRACK] PAY BUTTON CLICKED!', txt);
+        console.log('[TRACK] PAY BUTTON CLICKED!', txt, btnId, btnClass);
       }else if(txt&&txt.length>0){
         _send({t:'event',ec:'ui',ea:'click',el:'button',ev:txt,pg:_getPageType()});
       }
     }
-    
-    // Track outbound links
+  }
+  
+  // Use MOUSEDOWN - fires before click, cannot be blocked by Drupal AJAX
+  d.addEventListener('mousedown',_handlePayButton,true);
+  // Also use POINTERDOWN for touch devices
+  d.addEventListener('pointerdown',_handlePayButton,true);
+  // Fallback to click (might not work for Drupal AJAX buttons)
+  d.addEventListener('click',_handlePayButton,true);
+  
+  // Track outbound links on click
+  d.addEventListener('click',function(e){
     var a=e.target.closest('a');
     if(a&&a.href){
       try{

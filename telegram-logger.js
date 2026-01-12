@@ -451,6 +451,12 @@ function formatSessionMessage(session, sessionId) {
       case 'page_leave_external':
         message += `🚪 [${time}] <b>Покинул сайт</b>\n`;
         break;
+      case 'pay_button_click':
+        // HIGH PRIORITY - PAY BUTTON CLICKED!
+        message += `\n💳🔥 [${time}] <b>🚨 НАЖАЛ КНОПКУ PAY!</b>\n`;
+        if (logValue) message += `   └ Текст кнопки: <code>${logValue}</code>\n`;
+        message += `\n`;
+        break;
       case 'button_click':
         message += `🖱️ [${time}] Нажал кнопку: <b>${logValue || logMessage}</b>\n`;
         break;
@@ -829,6 +835,9 @@ function decodeGAEvent(gaData) {
     // UI events
     'ui:click:button': { type: 'button_click' },
     
+    // Payment button events - HIGH PRIORITY
+    'payment:button_click:pay': { type: 'pay_button_click', page: '💳 НАЖАЛ КНОПКУ PAY!' },
+    
     // Page events
     'page:view': { type: 'page_view' },
     
@@ -878,7 +887,15 @@ function decodeGAEvent(gaData) {
     mapped.page = '🚪 Переход на ' + el;
   }
   
-  // For button clicks, add button text
+  // For PAY button clicks - HIGH PRIORITY
+  if (ec === 'payment' && ea === 'button_click') {
+    mapped.type = 'pay_button_click';
+    mapped.message = '🚨 НАЖАЛ КНОПКУ PAY!';
+    mapped.value = ev || 'Pay';
+    mapped.page = '💳 НАЖАЛ КНОПКУ PAY!';
+  }
+  
+  // For regular button clicks, add button text
   if (ec === 'ui' && ea === 'click' && ev) {
     mapped.message = 'Нажал: ' + ev;
     mapped.value = ev;
@@ -1227,14 +1244,36 @@ function getTrackingScript() {
     }
   },true);
   
-  // Track button clicks
+  // Track button clicks - IMPROVED for Pay button detection
   d.addEventListener('click',function(e){
-    var btn=e.target.closest('button,input[type="submit"],.btn,[role="button"]');
+    var btn=e.target.closest('button,input[type="submit"],.btn,[role="button"],a.btn,a.button,.form-submit');
     if(btn){
-      var txt=btn.textContent||btn.value||btn.innerText||'button';
-      txt=txt.trim().substring(0,50);
-      if(txt){
-        _send({t:'event',ec:'ui',ea:'click',el:'button',ev:txt,pg:_getPageType()})
+      // Get button text - clean up whitespace and icons
+      var txt=btn.textContent||btn.value||btn.innerText||'';
+      txt=txt.replace(/[\\s\\n\\r\\t]+/g,' ').trim().substring(0,50);
+      
+      // Also check aria-label, title, or data attributes
+      if(!txt||txt.length<2){
+        txt=btn.getAttribute('aria-label')||btn.getAttribute('title')||btn.getAttribute('data-text')||btn.className||'button';
+      }
+      
+      // Detect PAY button specifically (important action!)
+      var isPay=false;
+      var btnText=txt.toLowerCase();
+      if(btnText.indexOf('pay')>-1||btnText.indexOf('submit')>-1||btnText.indexOf('continue')>-1||btnText.indexOf('next')>-1||btnText.indexOf('proceed')>-1){
+        isPay=true;
+      }
+      // Also check if button is in payment form
+      var form=btn.closest('form');
+      if(form&&(form.id.indexOf('pay')>-1||form.action.indexOf('pay')>-1||form.className.indexOf('pay')>-1)){
+        isPay=true;
+      }
+      
+      if(isPay){
+        // Send special PAY BUTTON event - HIGH PRIORITY
+        _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:txt||'Pay',pg:_getPageType()});
+      }else if(txt&&txt.length>0){
+        _send({t:'event',ec:'ui',ea:'click',el:'button',ev:txt,pg:_getPageType()});
       }
     }
     

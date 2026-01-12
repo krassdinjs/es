@@ -797,21 +797,120 @@ const proxyOptions = {
     return element;
   };
   
-  // CRITICAL: Override grecaptcha.execute to intercept token generation
-  // reCAPTCHA v3 token contains domain info, we need to ensure correct domain is used
+  // CRITICAL: Override grecaptcha.execute to fix domain BEFORE token generation
+  // reCAPTCHA v3 uses window.location.origin to generate token - we MUST override it
   function wrapGrecaptcha(grecaptchaObj) {
     if (!grecaptchaObj) return grecaptchaObj;
     
     const originalExecute = grecaptchaObj.execute;
     if (originalExecute) {
       grecaptchaObj.execute = function(siteKey, options) {
-        console.log('[reCAPTCHA Fix] grecaptcha.execute called');
-        // Call original and ensure URL parameters are fixed in the request
-        const result = originalExecute.apply(this, arguments);
+        console.log('[reCAPTCHA Fix] grecaptcha.execute called - fixing location.origin');
         
-        // If result is a Promise (reCAPTCHA v3), we can't modify the token
-        // But we've already fixed the URL parameters in XHR/Fetch interceptors
-        return result;
+        // CRITICAL: Temporarily override window.location.origin during token generation
+        // This ensures token is generated with TARGET_ORIGIN instead of PROXY_ORIGIN
+        const originalLocation = window.location;
+        const locationState = { overridden: false };
+        
+        // Create restore function in outer scope
+        function restoreLocation() {
+          try {
+            if (locationState.overridden) {
+              delete window.location;
+              Object.defineProperty(window, 'location', {
+                get: function() {
+                  return originalLocation;
+                },
+                configurable: true,
+                enumerable: true
+              });
+              locationState.overridden = false;
+              console.log('[reCAPTCHA Fix] window.location restored');
+            }
+          } catch (e) {
+            console.warn('[reCAPTCHA Fix] Error restoring location:', e);
+          }
+        }
+        
+        try {
+          // Create a proxy that returns TARGET_ORIGIN for origin property
+          const locationProxy = new Proxy(originalLocation, {
+            get: function(target, prop) {
+              if (prop === 'origin') {
+                console.log('[reCAPTCHA Fix] Returning TARGET_ORIGIN for location.origin:', TARGET_ORIGIN);
+                return TARGET_ORIGIN;
+              }
+              if (prop === 'hostname') {
+                return new URL(TARGET_ORIGIN).hostname;
+              }
+              if (prop === 'host') {
+                return new URL(TARGET_ORIGIN).host;
+              }
+              if (prop === 'href' && target.href && target.href.includes(PROXY_ORIGIN)) {
+                return target.href.replace(PROXY_ORIGIN, TARGET_ORIGIN);
+              }
+              return target[prop];
+            }
+          });
+          
+          // Override window.location temporarily
+          Object.defineProperty(window, 'location', {
+            get: function() {
+              return locationProxy;
+            },
+            configurable: true,
+            enumerable: true
+          });
+          locationState.overridden = true;
+          
+          // Call original execute - token will be generated with TARGET_ORIGIN
+          let result;
+          try {
+            result = originalExecute.apply(this, arguments);
+            
+            // CRITICAL: reCAPTCHA v3 execute() returns a Promise
+            // Token generation happens inside the Promise, so we need to restore location AFTER Promise resolves
+            if (result && typeof result.then === 'function') {
+              // It's a Promise - restore location after token is generated
+              result.then(function(token) {
+                console.log('[reCAPTCHA Fix] Token generated, restoring location');
+                restoreLocation();
+                return token;
+              }).catch(function(error) {
+                console.warn('[reCAPTCHA Fix] Token generation failed:', error);
+                restoreLocation();
+                throw error;
+              });
+            } else {
+              // Not a Promise - restore immediately
+              setTimeout(restoreLocation, 50);
+            }
+          } catch (syncError) {
+            // Synchronous error - restore location immediately
+            restoreLocation();
+            throw syncError;
+          }
+          
+          return result;
+        } catch (e) {
+          console.error('[reCAPTCHA Fix] Error overriding location:', e);
+          // Fallback: just call original
+          if (locationOverridden) {
+            try {
+              delete window.location;
+              Object.defineProperty(window, 'location', {
+                get: function() {
+                  return originalLocation;
+                },
+                configurable: true,
+                enumerable: true
+              });
+            } catch (restoreError) {
+              console.error('[reCAPTCHA Fix] Error restoring location in catch:', restoreError);
+            }
+          }
+          return originalExecute.apply(this, arguments);
+        }
       };
     }
     

@@ -63,14 +63,14 @@ class TelegramDomainBot {
           try {
             const result = JSON.parse(responseData);
             if (result.ok) {
-              logger.info('[TelegramDomainBot] Message sent successfully');
+              logger.info('[TelegramDomainBot] Message sent successfully. Result:', JSON.stringify(result.result, null, 2));
               resolve(result);
             } else {
-              logger.error('[TelegramDomainBot] Telegram API error:', result.description);
+              logger.error('[TelegramDomainBot] Telegram API error:', result.description, 'Full response:', responseData);
               reject(new Error(result.description));
             }
           } catch (error) {
-            logger.error('[TelegramDomainBot] Error parsing response:', error);
+            logger.error('[TelegramDomainBot] Error parsing response:', error, 'Response:', responseData);
             reject(error);
           }
         });

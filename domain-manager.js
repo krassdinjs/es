@@ -48,20 +48,26 @@ class DomainManager {
    * Инициализировать текущий домен из .env, если он не установлен
    */
   initializeCurrentDomain() {
-    // Если currentDomain не установлен, проверяем .env
-    if (!this.domains.currentDomain) {
-      const customDomain = process.env.CUSTOM_DOMAIN || '';
-      if (customDomain) {
+    const customDomain = process.env.CUSTOM_DOMAIN || '';
+    const currentDomain = this.domains.currentDomain || '';
+    
+    logger.info(`[DomainManager] initializeCurrentDomain: currentDomain="${currentDomain}", CUSTOM_DOMAIN="${customDomain}"`);
+    
+    // Если currentDomain не установлен или пустой, проверяем .env
+    if (!currentDomain || currentDomain.trim() === '') {
+      if (customDomain && customDomain.trim() !== '') {
         logger.info(`[DomainManager] Initializing currentDomain from .env: ${customDomain}`);
-        this.domains.currentDomain = customDomain;
+        this.domains.currentDomain = customDomain.trim();
         this.saveDomains();
+        logger.info(`[DomainManager] currentDomain set to: ${this.domains.currentDomain}`);
+      } else {
+        logger.warn(`[DomainManager] No currentDomain and no CUSTOM_DOMAIN in .env`);
       }
     } else {
       // Если currentDomain установлен, но не совпадает с .env, обновляем .env
-      const customDomain = process.env.CUSTOM_DOMAIN || '';
-      if (customDomain && customDomain !== this.domains.currentDomain) {
-        logger.info(`[DomainManager] Syncing .env with currentDomain: ${this.domains.currentDomain}`);
-        this.updateEnvFile(this.domains.currentDomain);
+      if (customDomain && customDomain.trim() !== '' && customDomain.trim() !== currentDomain.trim()) {
+        logger.info(`[DomainManager] Syncing .env with currentDomain: ${currentDomain}`);
+        this.updateEnvFile(currentDomain.trim());
       }
     }
   }

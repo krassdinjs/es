@@ -102,14 +102,19 @@ class TelegramDomainBot {
             const result = JSON.parse(responseData);
             if (result.ok) {
               logger.info('[TelegramDomainBot] Message sent successfully.');
-              logger.info('[TelegramDomainBot] Message ID:', result.result?.message_id);
-              logger.info('[TelegramDomainBot] Chat ID:', result.result?.chat?.id);
               // Проверяем наличие reply_markup в ответе
               if (result.result?.reply_markup) {
-                logger.info('[TelegramDomainBot] Reply markup in response:', JSON.stringify(result.result.reply_markup, null, 2));
+                logger.info('[TelegramDomainBot] Reply markup in response: YES');
               } else {
-                logger.warn('[TelegramDomainBot] WARNING: No reply_markup in Telegram API response!');
-                logger.warn('[TelegramDomainBot] Full result:', JSON.stringify(result.result, null, 2));
+                logger.error('[TelegramDomainBot] ERROR: No reply_markup in Telegram API response!');
+                logger.error('[TelegramDomainBot] This means Telegram rejected the keyboard!');
+                // Логируем что было отправлено
+                logger.error('[TelegramDomainBot] Payload that was sent:', JSON.stringify({
+                  chat_id: payload.chat_id,
+                  has_reply_markup: !!payload.reply_markup,
+                  reply_markup_type: typeof payload.reply_markup,
+                  reply_markup_keys: payload.reply_markup ? Object.keys(payload.reply_markup) : null
+                }));
               }
               resolve(result);
             } else {

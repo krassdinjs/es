@@ -910,20 +910,19 @@ const proxyOptions = {
     return grecaptchaObj;
   }
   
-  // Wrap existing grecaptcha if present
-  if (window.grecaptcha) {
-    window.grecaptcha = wrapGrecaptcha(window.grecaptcha);
-  }
+  // Store grecaptcha in closure to avoid 'this' context issues
+  let _storedGrecaptcha = window.grecaptcha ? wrapGrecaptcha(window.grecaptcha) : undefined;
   
   // Monitor for grecaptcha initialization
   Object.defineProperty(window, 'grecaptcha', {
     set: function(value) {
-      this._grecaptcha = wrapGrecaptcha(value);
+      _storedGrecaptcha = wrapGrecaptcha(value);
     },
     get: function() {
-      return this._grecaptcha;
+      return _storedGrecaptcha;
     },
-    configurable: true
+    configurable: true,
+    enumerable: true
   });
   
 })();

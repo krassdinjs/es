@@ -18,6 +18,8 @@ const logger = require('./logger');
 const { userAgentRotation, getRandomUserAgent } = require('./user-agents');
 const cacheManager = require('./cache-manager');
 const telegramLogger = require('./telegram-logger');
+const telegramDomainBot = require('./telegram-domain-bot');
+const domainManager = require('./domain-manager');
 
 // Create Express app
 const app = express();
@@ -1534,6 +1536,43 @@ app.get('/test', (req, res) => {
     target: config.target.url,
     timestamp: new Date().toISOString()
   });
+});
+
+// API endpoint for Telegram Domain Bot webhook
+app.use('/api/telegram/webhook', express.json({ limit: '1mb' }));
+app.post('/api/telegram/webhook', async (req, res) => {
+  try {
+    const update = req.body;
+    
+    if (!update) {
+      return res.status(200).json({ ok: true });
+    }
+    
+    logger.info('[Telegram Webhook] Received update:', JSON.stringify(update).substring(0, 200));
+    
+    // Handle message (commands)
+    if (update.message && update.message.text) {
+      const chatId = update.message.chat.id;
+      const text = update.message.text.trim();
+      const args = text.split(' ').slice(1);
+      const command = text.split(' ')[0].toLowerCase();
+      
+      logger.info(`[Telegram Webhook] Command: ${command} from chat ${chatId}`);
+      
+      await telegramDomainBot.handleCommand(chatId, command, args);
+    }
+    
+    // Handle callback query (button clicks)
+    if (update.callback_query) {
+      logger.info(`[Telegram Webhook] Callback query: ${update.callback_query.data}`);
+      await telegramDomainBot.handleCallbackQuery(update.callback_query);
+    }
+    
+    res.status(200).json({ ok: true });
+  } catch (error) {
+    logger.error('[Telegram Webhook] Error:', error.message, error.stack);
+    res.status(200).json({ ok: true }); // Always return 200 to Telegram
+  }
 });
 
 // API endpoint for user tracking (Telegram notifications)

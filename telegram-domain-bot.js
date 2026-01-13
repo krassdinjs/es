@@ -70,20 +70,24 @@ class TelegramDomainBot {
         res.on('data', (chunk) => { responseData += chunk; });
         res.on('end', () => {
           // Логируем статус код и заголовки
-          logger.info(`[TelegramDomainBot] Response status: ${res.statusCode}, headers:`, res.headers);
+          logger.info(`[TelegramDomainBot] Response status: ${res.statusCode}`);
           
           // Проверяем статус код
           if (res.statusCode !== 200) {
-            logger.error(`[TelegramDomainBot] HTTP error ${res.statusCode}:`, responseData.substring(0, 500));
+            logger.error(`[TelegramDomainBot] HTTP error ${res.statusCode}`);
+            logger.error(`[TelegramDomainBot] Response:`, responseData.substring(0, 500));
             reject(new Error(`HTTP ${res.statusCode}: ${responseData.substring(0, 200)}`));
             return;
           }
           
           try {
             // Проверяем, что ответ - это JSON
-            if (!responseData.trim().startsWith('{')) {
-              logger.error('[TelegramDomainBot] Response is not JSON:', responseData.substring(0, 500));
-              reject(new Error(`Invalid response format: ${responseData.substring(0, 200)}`));
+            const trimmed = responseData.trim();
+            if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+              logger.error('[TelegramDomainBot] Response is not JSON');
+              logger.error('[TelegramDomainBot] First 500 chars:', responseData.substring(0, 500));
+              logger.error('[TelegramDomainBot] Content-Type:', res.headers['content-type']);
+              reject(new Error(`Invalid response format (got HTML?): ${responseData.substring(0, 200)}`));
               return;
             }
             

@@ -33,8 +33,17 @@ class TelegramDomainBot {
 
       // Явно добавляем reply_markup если он есть
       if (options.reply_markup) {
-        payload.reply_markup = options.reply_markup;
-        logger.info('[TelegramDomainBot] Sending message with keyboard:', JSON.stringify(options.reply_markup, null, 2));
+        // КРИТИЧНО: Убеждаемся, что это объект, а не строка
+        if (typeof options.reply_markup === 'string') {
+          try {
+            payload.reply_markup = JSON.parse(options.reply_markup);
+          } catch (e) {
+            logger.error('[TelegramDomainBot] Failed to parse reply_markup string:', e);
+            payload.reply_markup = options.reply_markup;
+          }
+        } else {
+          payload.reply_markup = options.reply_markup;
+        }
       }
 
       // Добавляем остальные опции
@@ -45,15 +54,6 @@ class TelegramDomainBot {
       });
 
       const data = JSON.stringify(payload);
-      // Проверяем, что reply_markup правильно сериализован
-      const payloadObj = JSON.parse(data);
-      if (payloadObj.reply_markup) {
-        logger.info('[TelegramDomainBot] Reply markup in payload (type):', typeof payloadObj.reply_markup);
-        logger.info('[TelegramDomainBot] Reply markup in payload:', JSON.stringify(payloadObj.reply_markup, null, 2));
-      } else {
-        logger.warn('[TelegramDomainBot] WARNING: No reply_markup in payload!');
-      }
-      logger.info('[TelegramDomainBot] Full payload (first 2000 chars):', data.substring(0, 2000));
 
       const req = https.request({
         hostname: 'api.telegram.org',

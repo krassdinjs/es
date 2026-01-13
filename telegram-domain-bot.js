@@ -33,8 +33,18 @@ class TelegramDomainBot {
 
       // Добавляем reply_markup если он есть
       if (options.reply_markup) {
-        // КРИТИЧНО: Создаем глубокую копию объекта, чтобы избежать проблем с ссылками
-        payload.reply_markup = JSON.parse(JSON.stringify(options.reply_markup));
+        try {
+          // КРИТИЧНО: Создаем глубокую копию объекта, чтобы избежать проблем с ссылками
+          if (typeof options.reply_markup === 'object' && options.reply_markup !== null) {
+            payload.reply_markup = JSON.parse(JSON.stringify(options.reply_markup));
+          } else {
+            logger.error('[TelegramDomainBot] Invalid reply_markup type:', typeof options.reply_markup);
+            return reject(new Error('reply_markup must be an object'));
+          }
+        } catch (e) {
+          logger.error('[TelegramDomainBot] Error copying reply_markup:', e);
+          return reject(new Error('Failed to process reply_markup: ' + e.message));
+        }
       }
 
       // Добавляем остальные опции

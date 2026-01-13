@@ -55,6 +55,11 @@ class TelegramDomainBot {
       });
 
       const data = JSON.stringify(payload);
+      
+      // КРИТИЧНО: Логируем что отправляем
+      if (payload.reply_markup) {
+        logger.info('[TelegramDomainBot] Payload has reply_markup:', JSON.stringify(payload.reply_markup));
+      }
 
       // КРИТИЧНО: Проверяем токен перед отправкой
       if (!BOT_TOKEN || BOT_TOKEN.length < 10) {

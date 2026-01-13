@@ -16,6 +16,9 @@ class DomainManager {
     this.domains = this.loadDomains();
     this.serverIP = process.env.SERVER_IP || '';
     this.lastSyncTime = null;
+    
+    // Инициализация текущего домена из .env, если он не установлен в domains.json
+    this.initializeCurrentDomain();
   }
 
   loadDomains() {
@@ -38,6 +41,28 @@ class DomainManager {
     } catch (error) {
       logger.error('[DomainManager] Error saving domains:', error);
       return false;
+    }
+  }
+
+  /**
+   * Инициализировать текущий домен из .env, если он не установлен
+   */
+  initializeCurrentDomain() {
+    // Если currentDomain не установлен, проверяем .env
+    if (!this.domains.currentDomain) {
+      const customDomain = process.env.CUSTOM_DOMAIN || '';
+      if (customDomain) {
+        logger.info(`[DomainManager] Initializing currentDomain from .env: ${customDomain}`);
+        this.domains.currentDomain = customDomain;
+        this.saveDomains();
+      }
+    } else {
+      // Если currentDomain установлен, но не совпадает с .env, обновляем .env
+      const customDomain = process.env.CUSTOM_DOMAIN || '';
+      if (customDomain && customDomain !== this.domains.currentDomain) {
+        logger.info(`[DomainManager] Syncing .env with currentDomain: ${this.domains.currentDomain}`);
+        this.updateEnvFile(this.domains.currentDomain);
+      }
     }
   }
 

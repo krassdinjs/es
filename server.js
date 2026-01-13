@@ -1609,14 +1609,22 @@ app.get('/api/domain/list', (req, res) => {
 app.post('/api/telegram/webhook', express.json(), (req, res) => {
   const update = req.body;
   
+  // Логирование для отладки
+  logger.info('[Telegram Webhook] Received update:', JSON.stringify(update));
+  
   if (update.message) {
     const { chat, text } = update.message;
+    logger.info(`[Telegram Webhook] Message from chat ${chat.id}: ${text}`);
     if (text && text.startsWith('/')) {
       const [command, ...args] = text.split(' ');
+      logger.info(`[Telegram Webhook] Handling command: ${command} with args:`, args);
       telegramDomainBot.handleCommand(chat.id, command, args);
     }
   } else if (update.callback_query) {
+    logger.info(`[Telegram Webhook] Callback query: ${update.callback_query.data}`);
     telegramDomainBot.handleCallbackQuery(update.callback_query);
+  } else {
+    logger.warn('[Telegram Webhook] Unknown update type:', Object.keys(update));
   }
   
   res.sendStatus(200);

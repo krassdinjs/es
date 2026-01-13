@@ -56,6 +56,12 @@ class TelegramDomainBot {
 
       const data = JSON.stringify(payload);
 
+      // КРИТИЧНО: Проверяем токен перед отправкой
+      if (!BOT_TOKEN || BOT_TOKEN.length < 10) {
+        logger.error('[TelegramDomainBot] Invalid BOT_TOKEN!');
+        return reject(new Error('Invalid BOT_TOKEN'));
+      }
+
       const req = https.request({
         hostname: 'api.telegram.org',
         port: 443,
@@ -63,7 +69,7 @@ class TelegramDomainBot {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Content-Length': data.length
+          'Content-Length': Buffer.byteLength(data, 'utf8')
         }
       }, (res) => {
         let responseData = '';

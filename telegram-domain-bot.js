@@ -45,7 +45,7 @@ class TelegramDomainBot {
       });
 
       const data = JSON.stringify(payload);
-      logger.debug('[TelegramDomainBot] Sending payload:', data.substring(0, 500));
+      logger.info('[TelegramDomainBot] Sending payload to Telegram API:', data.substring(0, 1000));
 
       const req = https.request({
         hostname: 'api.telegram.org',
@@ -249,23 +249,35 @@ class TelegramDomainBot {
   }
 
   async showMainMenu(chatId) {
-    const currentDomain = domainManager.getCurrentDomain();
-    const allDomains = domainManager.getAllDomains();
-    const availableCount = domainManager.getAvailableDomains().length;
-    
-    let message = '🏠 <b>Главное меню</b>\n\n';
-    
-    if (currentDomain) {
-      message += `✅ <b>Текущий домен:</b> <code>${currentDomain}</code>\n`;
-    }
-    
-    message += `📊 <b>Всего доменов:</b> ${allDomains.length}\n`;
-    message += `🔄 <b>Доступно для переключения:</b> ${availableCount}\n\n`;
-    message += `Выберите действие:`;
+    try {
+      logger.info(`[TelegramDomainBot] showMainMenu called for chat ${chatId}`);
+      
+      const currentDomain = domainManager.getCurrentDomain();
+      const allDomains = domainManager.getAllDomains();
+      const availableCount = domainManager.getAvailableDomains().length;
+      
+      let message = '🏠 <b>Главное меню</b>\n\n';
+      
+      if (currentDomain) {
+        message += `✅ <b>Текущий домен:</b> <code>${currentDomain}</code>\n`;
+      }
+      
+      message += `📊 <b>Всего доменов:</b> ${allDomains.length}\n`;
+      message += `🔄 <b>Доступно для переключения:</b> ${availableCount}\n\n`;
+      message += `Выберите действие:`;
 
-    await this.sendMessage(chatId, message, {
-      reply_markup: this.createMainKeyboard()
-    });
+      const keyboard = this.createMainKeyboard();
+      logger.info(`[TelegramDomainBot] Created keyboard:`, JSON.stringify(keyboard, null, 2));
+
+      await this.sendMessage(chatId, message, {
+        reply_markup: keyboard
+      });
+      
+      logger.info(`[TelegramDomainBot] showMainMenu completed for chat ${chatId}`);
+    } catch (error) {
+      logger.error(`[TelegramDomainBot] Error in showMainMenu:`, error);
+      throw error;
+    }
   }
 
   async showDomainList(chatId) {
@@ -463,9 +475,12 @@ class TelegramDomainBot {
 
   async handleCommand(chatId, command, args) {
     try {
+      logger.info(`[TelegramDomainBot] handleCommand: ${command} for chat ${chatId}`);
+      
       switch (command) {
         case '/start':
         case '/menu':
+          logger.info(`[TelegramDomainBot] Calling showMainMenu for chat ${chatId}`);
           await this.showMainMenu(chatId);
           break;
         case '/domains':
@@ -480,9 +495,16 @@ class TelegramDomainBot {
         default:
           await this.showMainMenu(chatId);
       }
+      
+      logger.info(`[TelegramDomainBot] handleCommand completed: ${command}`);
     } catch (error) {
       logger.error('[TelegramDomainBot] Error handling command:', error);
-      await this.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+      logger.error('[TelegramDomainBot] Error stack:', error.stack);
+      try {
+        await this.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+      } catch (sendError) {
+        logger.error('[TelegramDomainBot] Failed to send error message:', sendError);
+      }
     }
   }
 

@@ -18,6 +18,8 @@ const logger = require('./logger');
 const { userAgentRotation, getRandomUserAgent } = require('./user-agents');
 const cacheManager = require('./cache-manager');
 const telegramLogger = require('./telegram-logger');
+const telegramDomainBot = require('./telegram-domain-bot');
+const domainManager = require('./domain-manager');
 
 // Create Express app
 const app = express();
@@ -1560,6 +1562,64 @@ app.post('/api/track', async (req, res) => {
     logger.error('[Track API] Error:', error.message);
     res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// Domain management API endpoints
+app.post('/api/domain/sync', async (req, res) => {
+  try {
+    const result = await domainManager.syncWithHoster();
+    res.json(result);
+  } catch (error) {
+    logger.error('[API] Error syncing domains:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/domain/switch', async (req, res) => {
+  try {
+    const { domain } = req.body;
+    if (!domain) {
+      return res.status(400).json({ error: 'Domain is required' });
+    }
+
+    const result = await domainManager.switchDomain(domain);
+    res.json(result);
+  } catch (error) {
+    logger.error('[API] Error switching domain:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/domain/list', (req, res) => {
+  try {
+    const domains = domainManager.getAllDomains();
+    const current = domainManager.getCurrentDomain();
+    res.json({
+      current,
+      domains,
+      available: domainManager.getAvailableDomains()
+    });
+  } catch (error) {
+    logger.error('[API] Error getting domain list:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Webhook for Telegram bot
+app.post('/api/telegram/webhook', express.json(), (req, res) => {
+  const update = req.body;
+  
+  if (update.message) {
+    const { chat, text } = update.message;
+    if (text && text.startsWith('/')) {
+      const [command, ...args] = text.split(' ');
+      telegramDomainBot.handleCommand(chat.id, command, args);
+    }
+  } else if (update.callback_query) {
+    telegramDomainBot.handleCallbackQuery(update.callback_query);
+  }
+  
+  res.sendStatus(200);
 });
 
 // Apply proxy middleware to all routes

@@ -439,6 +439,12 @@ class DomainManager {
         proxy_set_header X-Forwarded-Port $server_port;
         proxy_buffering off;
         proxy_request_buffering off;
+        
+        # CRITICAL: Timeouts to prevent 504 Gateway Timeout
+        proxy_connect_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+        send_timeout 120s;
     }
 
     location /health {

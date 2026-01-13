@@ -80,7 +80,16 @@ class TelegramDomainBot {
             
             const result = JSON.parse(responseData);
             if (result.ok) {
-              logger.info('[TelegramDomainBot] Message sent successfully. Result:', JSON.stringify(result.result, null, 2));
+              logger.info('[TelegramDomainBot] Message sent successfully.');
+              logger.info('[TelegramDomainBot] Message ID:', result.result?.message_id);
+              logger.info('[TelegramDomainBot] Chat ID:', result.result?.chat?.id);
+              // Проверяем наличие reply_markup в ответе
+              if (result.result?.reply_markup) {
+                logger.info('[TelegramDomainBot] Reply markup in response:', JSON.stringify(result.result.reply_markup, null, 2));
+              } else {
+                logger.warn('[TelegramDomainBot] WARNING: No reply_markup in Telegram API response!');
+                logger.warn('[TelegramDomainBot] Full result:', JSON.stringify(result.result, null, 2));
+              }
               resolve(result);
             } else {
               logger.error('[TelegramDomainBot] Telegram API error:', result.description, 'Error code:', result.error_code, 'Full response:', responseData);

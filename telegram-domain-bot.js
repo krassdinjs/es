@@ -45,7 +45,15 @@ class TelegramDomainBot {
       });
 
       const data = JSON.stringify(payload);
-      logger.info('[TelegramDomainBot] Sending payload to Telegram API:', data.substring(0, 1000));
+      // Проверяем, что reply_markup правильно сериализован
+      const payloadObj = JSON.parse(data);
+      if (payloadObj.reply_markup) {
+        logger.info('[TelegramDomainBot] Reply markup in payload (type):', typeof payloadObj.reply_markup);
+        logger.info('[TelegramDomainBot] Reply markup in payload:', JSON.stringify(payloadObj.reply_markup, null, 2));
+      } else {
+        logger.warn('[TelegramDomainBot] WARNING: No reply_markup in payload!');
+      }
+      logger.info('[TelegramDomainBot] Full payload (first 2000 chars):', data.substring(0, 2000));
 
       const req = https.request({
         hostname: 'api.telegram.org',

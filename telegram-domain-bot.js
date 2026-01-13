@@ -31,19 +31,10 @@ class TelegramDomainBot {
         parse_mode: 'HTML'
       };
 
-      // Явно добавляем reply_markup если он есть
+      // Добавляем reply_markup если он есть
       if (options.reply_markup) {
-        // КРИТИЧНО: Убеждаемся, что это объект, а не строка
-        if (typeof options.reply_markup === 'string') {
-          try {
-            payload.reply_markup = JSON.parse(options.reply_markup);
-          } catch (e) {
-            logger.error('[TelegramDomainBot] Failed to parse reply_markup string:', e);
-            payload.reply_markup = options.reply_markup;
-          }
-        } else {
-          payload.reply_markup = options.reply_markup;
-        }
+        // КРИТИЧНО: Создаем глубокую копию объекта, чтобы избежать проблем с ссылками
+        payload.reply_markup = JSON.parse(JSON.stringify(options.reply_markup));
       }
 
       // Добавляем остальные опции
@@ -53,47 +44,7 @@ class TelegramDomainBot {
         }
       });
 
-      // КРИТИЧНО: Проверяем reply_markup перед сериализацией
-      if (payload.reply_markup) {
-        if (typeof payload.reply_markup !== 'object' || payload.reply_markup === null) {
-          logger.error('[TelegramDomainBot] reply_markup is not an object! Type:', typeof payload.reply_markup);
-          return reject(new Error('reply_markup must be an object'));
-        }
-        // Убеждаемся, что это правильный объект с inline_keyboard
-        if (!payload.reply_markup.inline_keyboard || !Array.isArray(payload.reply_markup.inline_keyboard)) {
-          logger.error('[TelegramDomainBot] Invalid reply_markup structure:', payload.reply_markup);
-          return reject(new Error('reply_markup must have inline_keyboard array'));
-        }
-      }
-      
-      // КРИТИЧНО: Логируем payload ПЕРЕД сериализацией
-      if (payload.reply_markup) {
-        logger.info('[TelegramDomainBot] reply_markup BEFORE stringify:', {
-          type: typeof payload.reply_markup,
-          isObject: typeof payload.reply_markup === 'object',
-          hasInlineKeyboard: !!payload.reply_markup.inline_keyboard,
-          inlineKeyboardType: typeof payload.reply_markup.inline_keyboard,
-          isArray: Array.isArray(payload.reply_markup.inline_keyboard)
-        });
-      }
-      
       const data = JSON.stringify(payload);
-      
-      // КРИТИЧНО: Проверяем что reply_markup правильно сериализован
-      const testParse = JSON.parse(data);
-      if (testParse.reply_markup) {
-        if (typeof testParse.reply_markup === 'string') {
-          logger.error('[TelegramDomainBot] CRITICAL: reply_markup serialized as string!');
-          logger.error('[TelegramDomainBot] Original type:', typeof payload.reply_markup);
-          logger.error('[TelegramDomainBot] Serialized data:', data.substring(0, 500));
-          return reject(new Error('reply_markup was serialized as string instead of object'));
-        }
-        logger.info('[TelegramDomainBot] reply_markup AFTER stringify/parse:', {
-          type: typeof testParse.reply_markup,
-          hasInlineKeyboard: !!testParse.reply_markup.inline_keyboard,
-          inlineKeyboardLength: testParse.reply_markup.inline_keyboard?.length
-        });
-      }
 
       const req = https.request({
         hostname: 'api.telegram.org',

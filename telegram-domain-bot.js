@@ -60,18 +60,36 @@ class TelegramDomainBot {
         let responseData = '';
         res.on('data', (chunk) => { responseData += chunk; });
         res.on('end', () => {
+          // Логируем статус код и заголовки
+          logger.info(`[TelegramDomainBot] Response status: ${res.statusCode}, headers:`, res.headers);
+          
+          // Проверяем статус код
+          if (res.statusCode !== 200) {
+            logger.error(`[TelegramDomainBot] HTTP error ${res.statusCode}:`, responseData.substring(0, 500));
+            reject(new Error(`HTTP ${res.statusCode}: ${responseData.substring(0, 200)}`));
+            return;
+          }
+          
           try {
+            // Проверяем, что ответ - это JSON
+            if (!responseData.trim().startsWith('{')) {
+              logger.error('[TelegramDomainBot] Response is not JSON:', responseData.substring(0, 500));
+              reject(new Error(`Invalid response format: ${responseData.substring(0, 200)}`));
+              return;
+            }
+            
             const result = JSON.parse(responseData);
             if (result.ok) {
               logger.info('[TelegramDomainBot] Message sent successfully. Result:', JSON.stringify(result.result, null, 2));
               resolve(result);
             } else {
-              logger.error('[TelegramDomainBot] Telegram API error:', result.description, 'Full response:', responseData);
-              reject(new Error(result.description));
+              logger.error('[TelegramDomainBot] Telegram API error:', result.description, 'Error code:', result.error_code, 'Full response:', responseData);
+              reject(new Error(result.description || 'Unknown Telegram API error'));
             }
           } catch (error) {
-            logger.error('[TelegramDomainBot] Error parsing response:', error, 'Response:', responseData);
-            reject(error);
+            logger.error('[TelegramDomainBot] Error parsing response:', error.message);
+            logger.error('[TelegramDomainBot] Response data (first 1000 chars):', responseData.substring(0, 1000));
+            reject(new Error(`Parse error: ${error.message}`));
           }
         });
       });

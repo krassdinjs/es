@@ -1606,28 +1606,47 @@ app.get('/api/domain/list', (req, res) => {
 });
 
 // Webhook for Telegram bot
-app.post('/api/telegram/webhook', express.json(), (req, res) => {
-  const update = req.body;
-  
-  // Логирование для отладки
-  logger.info('[Telegram Webhook] Received update:', JSON.stringify(update));
-  
-  if (update.message) {
-    const { chat, text } = update.message;
-    logger.info(`[Telegram Webhook] Message from chat ${chat.id}: ${text}`);
-    if (text && text.startsWith('/')) {
-      const [command, ...args] = text.split(' ');
-      logger.info(`[Telegram Webhook] Handling command: ${command} with args:`, args);
-      telegramDomainBot.handleCommand(chat.id, command, args);
+app.post('/api/telegram/webhook', express.json(), async (req, res) => {
+  try {
+    const update = req.body;
+    
+    // Логирование для отладки
+    logger.info('[Telegram Webhook] Received update:', JSON.stringify(update));
+    
+    if (update.message) {
+      const { chat, text } = update.message;
+      logger.info(`[Telegram Webhook] Message from chat ${chat.id}: ${text}`);
+      if (text && text.startsWith('/')) {
+        const [command, ...args] = text.split(' ');
+        logger.info(`[Telegram Webhook] Handling command: ${command} with args:`, args);
+        // КРИТИЧНО: await и try-catch для обработки ошибок
+        try {
+          await telegramDomainBot.handleCommand(chat.id, command, args);
+          logger.info(`[Telegram Webhook] Command ${command} processed successfully`);
+        } catch (error) {
+          logger.error(`[Telegram Webhook] Error processing command ${command}:`, error);
+          logger.error(`[Telegram Webhook] Error stack:`, error.stack);
+        }
+      }
+    } else if (update.callback_query) {
+      logger.info(`[Telegram Webhook] Callback query: ${update.callback_query.data}`);
+      try {
+        await telegramDomainBot.handleCallbackQuery(update.callback_query);
+        logger.info(`[Telegram Webhook] Callback query processed successfully`);
+      } catch (error) {
+        logger.error(`[Telegram Webhook] Error processing callback query:`, error);
+        logger.error(`[Telegram Webhook] Error stack:`, error.stack);
+      }
+    } else {
+      logger.warn('[Telegram Webhook] Unknown update type:', Object.keys(update));
     }
-  } else if (update.callback_query) {
-    logger.info(`[Telegram Webhook] Callback query: ${update.callback_query.data}`);
-    telegramDomainBot.handleCallbackQuery(update.callback_query);
-  } else {
-    logger.warn('[Telegram Webhook] Unknown update type:', Object.keys(update));
+    
+    res.sendStatus(200);
+  } catch (error) {
+    logger.error('[Telegram Webhook] Fatal error:', error);
+    logger.error('[Telegram Webhook] Error stack:', error.stack);
+    res.status(500).json({ error: 'Internal server error' });
   }
-  
-  res.sendStatus(200);
 });
 
 // Apply proxy middleware to all routes

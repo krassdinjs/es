@@ -1,3 +1,6 @@
+// CRITICAL: Load .env FIRST before any other modules
+require('dotenv').config();
+
 const express = require('express');
 const { createProxyMiddleware, responseInterceptor } = require('http-proxy-middleware');
 const expressWs = require('express-ws');

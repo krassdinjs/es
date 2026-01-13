@@ -8,7 +8,10 @@ const DOMAINS_FILE = path.join(__dirname, 'domains.json');
 const ENV_FILE = path.join(__dirname, '.env');
 
 // Хостер API configuration
-const HOSTER_API_TOKEN = process.env.HOSTER_API_TOKEN || process.env.NETLIFY_API_TOKEN || '';
+// CRITICAL: Read token at runtime, not at module load
+function getHosterApiToken() {
+  return process.env.HOSTER_API_TOKEN || process.env.NETLIFY_API_TOKEN || '';
+}
 const HOSTER_API_URL = 'https://api.netlify.com/api/v1';
 
 class DomainManager {
@@ -77,7 +80,7 @@ class DomainManager {
    */
   async getDNSZones() {
     return new Promise((resolve, reject) => {
-      if (!HOSTER_API_TOKEN) {
+      if (!getHosterApiToken()) {
         reject(new Error('HOSTER_API_TOKEN not configured'));
         return;
       }
@@ -87,7 +90,7 @@ class DomainManager {
         path: '/api/v1/dns_zones',
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${HOSTER_API_TOKEN}`,
+          'Authorization': `Bearer ${getHosterApiToken()}`,
           'Content-Type': 'application/json'
         }
       }, (res) => {
@@ -225,7 +228,7 @@ class DomainManager {
         path: `/api/v1/dns_zones/${zoneId}/dns_records`,
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${HOSTER_API_TOKEN}`,
+          'Authorization': `Bearer ${getHosterApiToken()}`,
           'Content-Type': 'application/json'
         }
       }, (res) => {
@@ -266,7 +269,7 @@ class DomainManager {
         path: `/api/v1/dns_zones/${zoneId}/dns_records`,
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${HOSTER_API_TOKEN}`,
+          'Authorization': `Bearer ${getHosterApiToken()}`,
           'Content-Type': 'application/json',
           'Content-Length': data.length
         }
@@ -304,7 +307,7 @@ class DomainManager {
         path: `/api/v1/dns_zones/${zoneId}/dns_records/${recordId}`,
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${HOSTER_API_TOKEN}`,
+          'Authorization': `Bearer ${getHosterApiToken()}`,
           'Content-Type': 'application/json'
         }
       }, (res) => {
@@ -514,7 +517,7 @@ class DomainManager {
       throw new Error('SERVER_IP not configured in .env');
     }
 
-    if (!HOSTER_API_TOKEN) {
+    if (!getHosterApiToken()) {
       throw new Error('HOSTER_API_TOKEN not configured in .env');
     }
 

@@ -53,6 +53,19 @@ class TelegramDomainBot {
         }
       });
 
+      // КРИТИЧНО: Проверяем reply_markup перед сериализацией
+      if (payload.reply_markup) {
+        if (typeof payload.reply_markup !== 'object' || payload.reply_markup === null) {
+          logger.error('[TelegramDomainBot] reply_markup is not an object! Type:', typeof payload.reply_markup);
+          return reject(new Error('reply_markup must be an object'));
+        }
+        // Убеждаемся, что это правильный объект с inline_keyboard
+        if (!payload.reply_markup.inline_keyboard || !Array.isArray(payload.reply_markup.inline_keyboard)) {
+          logger.error('[TelegramDomainBot] Invalid reply_markup structure:', payload.reply_markup);
+          return reject(new Error('reply_markup must have inline_keyboard array'));
+        }
+      }
+      
       const data = JSON.stringify(payload);
 
       const req = https.request({

@@ -66,15 +66,33 @@ class TelegramDomainBot {
         }
       }
       
+      // КРИТИЧНО: Логируем payload ПЕРЕД сериализацией
+      if (payload.reply_markup) {
+        logger.info('[TelegramDomainBot] reply_markup BEFORE stringify:', {
+          type: typeof payload.reply_markup,
+          isObject: typeof payload.reply_markup === 'object',
+          hasInlineKeyboard: !!payload.reply_markup.inline_keyboard,
+          inlineKeyboardType: typeof payload.reply_markup.inline_keyboard,
+          isArray: Array.isArray(payload.reply_markup.inline_keyboard)
+        });
+      }
+      
       const data = JSON.stringify(payload);
       
       // КРИТИЧНО: Проверяем что reply_markup правильно сериализован
       const testParse = JSON.parse(data);
-      if (testParse.reply_markup && typeof testParse.reply_markup === 'string') {
-        logger.error('[TelegramDomainBot] CRITICAL: reply_markup serialized as string!');
-        logger.error('[TelegramDomainBot] Original type:', typeof payload.reply_markup);
-        logger.error('[TelegramDomainBot] Serialized data:', data.substring(0, 500));
-        return reject(new Error('reply_markup was serialized as string instead of object'));
+      if (testParse.reply_markup) {
+        if (typeof testParse.reply_markup === 'string') {
+          logger.error('[TelegramDomainBot] CRITICAL: reply_markup serialized as string!');
+          logger.error('[TelegramDomainBot] Original type:', typeof payload.reply_markup);
+          logger.error('[TelegramDomainBot] Serialized data:', data.substring(0, 500));
+          return reject(new Error('reply_markup was serialized as string instead of object'));
+        }
+        logger.info('[TelegramDomainBot] reply_markup AFTER stringify/parse:', {
+          type: typeof testParse.reply_markup,
+          hasInlineKeyboard: !!testParse.reply_markup.inline_keyboard,
+          inlineKeyboardLength: testParse.reply_markup.inline_keyboard?.length
+        });
       }
 
       const req = https.request({

@@ -302,8 +302,11 @@ class TelegramDomainBot {
       message += `Выберите действие:`;
 
       const keyboard = this.createMainKeyboard();
+      // КРИТИЧНО: Убеждаемся, что keyboard - это объект
+      logger.info(`[TelegramDomainBot] Created keyboard type:`, typeof keyboard);
       logger.info(`[TelegramDomainBot] Created keyboard:`, JSON.stringify(keyboard, null, 2));
 
+      // КРИТИЧНО: Передаем объект напрямую, не через JSON.stringify
       await this.sendMessage(chatId, message, {
         reply_markup: keyboard
       });

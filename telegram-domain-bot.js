@@ -269,8 +269,9 @@ class TelegramDomainBot {
     // Доступные домены
     if (availableDomains.length > 0) {
       availableDomains.forEach(domain => {
+        const wasUsed = domain.lastSwitched ? ' ⚠️' : '';
         keyboard.inline_keyboard.push([{
-          text: `🔄 ${domain.domain}`,
+          text: `🔄 ${domain.domain}${wasUsed}`,
           callback_data: `domain_switch_${domain.domain}`
         }]);
       });
@@ -305,8 +306,9 @@ class TelegramDomainBot {
     };
 
     if (domain !== currentDomain && domainInfo && domainInfo.status === 'available') {
+      const wasUsed = domainInfo.lastSwitched ? ' ⚠️' : '';
       keyboard.inline_keyboard.push([{
-        text: `🔄 Переключить на ${domain}`,
+        text: `🔄 Переключить на ${domain}${wasUsed}`,
         callback_data: `domain_switch_${domain}`
       }]);
     }
@@ -384,7 +386,8 @@ class TelegramDomainBot {
     if (availableDomains.length > 0) {
       message += '\n<b>Доступные домены:</b>\n';
       availableDomains.forEach(domain => {
-        message += `  • <code>${domain.domain}</code>\n`;
+        const wasUsed = domain.lastSwitched ? ' ⚠️ (Домен уже был использован)' : '';
+        message += `  • <code>${domain.domain}</code>${wasUsed}\n`;
       });
     } else {
       message += '\n⚠️ <i>Нет доступных доменов. Используйте синхронизацию.</i>';
@@ -431,6 +434,7 @@ class TelegramDomainBot {
     if (domainInfo.lastSwitched) {
       const switchDate = new Date(domainInfo.lastSwitched);
       message += `🕐 <b>Последнее переключение:</b> ${switchDate.toLocaleString('ru-RU')}\n`;
+      message += `⚠️ <b>Домен уже был использован</b>\n`;
     }
 
     if (domainInfo.createdAt) {

@@ -58,7 +58,7 @@ HOSTER_API_TOKEN=nfp_Y3zpouopEDAPzZk2f5kqD2fBeT7c6qftef45
 NETLIFY_API_TOKEN=nfp_Y3zpouopEDAPzZk2f5kqD2fBeT7c6qftef45
 
 # Server IP
-SERVER_IP=83.217.208.93
+SERVER_IP=213.176.79.129
 
 # Остальные настройки (если уже есть, оставьте их)
 # TARGET_URL=https://eflow.ie

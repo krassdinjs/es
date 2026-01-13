@@ -22,7 +22,7 @@ HOSTER_API_TOKEN=nfp_Y3zpouopEDAPzZk2f5kqD2fBeT7c6qftef45
 NETLIFY_API_TOKEN=nfp_Y3zpouopEDAPzZk2f5kqD2fBeT7c6qftef45
 
 # Server IP
-SERVER_IP=83.217.208.93
+SERVER_IP=213.176.79.129
 
 # SSL Email для certbot
 SSL_EMAIL=your-email@example.com

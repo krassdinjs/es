@@ -28,16 +28,24 @@ class TelegramDomainBot {
       const payload = {
         chat_id: chatId,
         text,
-        parse_mode: 'HTML',
-        ...options
+        parse_mode: 'HTML'
       };
 
-      // Логирование для отладки
+      // Явно добавляем reply_markup если он есть
       if (options.reply_markup) {
-        logger.info('[TelegramDomainBot] Sending message with keyboard:', JSON.stringify(options.reply_markup));
+        payload.reply_markup = options.reply_markup;
+        logger.info('[TelegramDomainBot] Sending message with keyboard:', JSON.stringify(options.reply_markup, null, 2));
       }
 
+      // Добавляем остальные опции
+      Object.keys(options).forEach(key => {
+        if (key !== 'reply_markup') {
+          payload[key] = options[key];
+        }
+      });
+
       const data = JSON.stringify(payload);
+      logger.debug('[TelegramDomainBot] Sending payload:', data.substring(0, 500));
 
       const req = https.request({
         hostname: 'api.telegram.org',

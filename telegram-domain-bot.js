@@ -25,12 +25,19 @@ class TelegramDomainBot {
 
   async sendMessage(chatId, text, options = {}) {
     return new Promise((resolve, reject) => {
-      const data = JSON.stringify({
+      const payload = {
         chat_id: chatId,
         text,
         parse_mode: 'HTML',
         ...options
-      });
+      };
+
+      // Логирование для отладки
+      if (options.reply_markup) {
+        logger.info('[TelegramDomainBot] Sending message with keyboard:', JSON.stringify(options.reply_markup));
+      }
+
+      const data = JSON.stringify(payload);
 
       const req = https.request({
         hostname: 'api.telegram.org',
@@ -48,17 +55,23 @@ class TelegramDomainBot {
           try {
             const result = JSON.parse(responseData);
             if (result.ok) {
+              logger.info('[TelegramDomainBot] Message sent successfully');
               resolve(result);
             } else {
+              logger.error('[TelegramDomainBot] Telegram API error:', result.description);
               reject(new Error(result.description));
             }
           } catch (error) {
+            logger.error('[TelegramDomainBot] Error parsing response:', error);
             reject(error);
           }
         });
       });
 
-      req.on('error', reject);
+      req.on('error', (error) => {
+        logger.error('[TelegramDomainBot] Request error:', error);
+        reject(error);
+      });
       req.write(data);
       req.end();
     });

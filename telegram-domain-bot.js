@@ -136,7 +136,12 @@ class TelegramDomainBot {
         logger.error('[TelegramDomainBot] Request error:', error);
         reject(error);
       });
-      req.write(data);
+      
+      // КРИТИЧНО: Логируем что отправляем
+      logger.info('[TelegramDomainBot] Sending request to:', `/bot${BOT_TOKEN.substring(0, 10)}.../sendMessage`);
+      logger.info('[TelegramDomainBot] Payload size:', data.length, 'bytes');
+      
+      req.write(data, 'utf8');
       req.end();
     });
   }

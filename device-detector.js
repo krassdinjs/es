@@ -59,8 +59,42 @@ function detectDeviceType(userAgent) {
  * Получить информацию об IP через внешний API (ip-api.com - бесплатный)
  */
 async function getIPInfo(ip) {
-  // Пропустить локальные IP
-  if (ip === '127.0.0.1' || ip === '::1' || ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'device-detector.js:getIPInfo',message:'IP info lookup start',data:{ip:ip},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+  // #endregion
+  
+  // Пропустить локальные и приватные IP
+  if (!ip || ip === 'Unknown' || ip === 'unknown') {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'device-detector.js:getIPInfo',message:'IP is Unknown',data:{ip:ip},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+    // #endregion
+    return { country: 'Unknown', city: 'Unknown' };
+  }
+  
+  // Проверка на локальные адреса
+  if (ip === '127.0.0.1' || ip === '::1' || ip === 'localhost') {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'device-detector.js:getIPInfo',message:'IP is localhost',data:{ip:ip},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+    // #endregion
+    return { country: 'Local', city: 'Local' };
+  }
+  
+  // Проверка на приватные сети (RFC 1918)
+  if (ip.startsWith('192.168.') || 
+      ip.startsWith('10.') || 
+      (ip.startsWith('172.') && parseInt(ip.split('.')[1]) >= 16 && parseInt(ip.split('.')[1]) <= 31)) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'device-detector.js:getIPInfo',message:'IP is private network',data:{ip:ip},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+    // #endregion
+    return { country: 'Local', city: 'Local' };
+  }
+  
+  // Проверка на IPv6 локальные
+  if (ip.startsWith('fe80:') || ip.startsWith('::ffff:127.') || ip.startsWith('::ffff:192.168.') || 
+      ip.startsWith('::ffff:10.') || (ip.startsWith('::ffff:172.') && parseInt(ip.split('.')[1]) >= 16 && parseInt(ip.split('.')[1]) <= 31)) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'device-detector.js:getIPInfo',message:'IP is IPv6 local',data:{ip:ip},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+    // #endregion
     return { country: 'Local', city: 'Local' };
   }
   
@@ -97,6 +131,10 @@ async function getIPInfo(ip) {
                 lon: result.lon
               };
               
+              // #region agent log
+              fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'device-detector.js:getIPInfo',message:'IP API success',data:{ip:ip,country:ipInfo.country,city:ipInfo.city,query:result.query},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
+              // #endregion
+              
               // Сохранить в кэш
               deviceCache.set(cacheKey, {
                 data: ipInfo,
@@ -105,6 +143,9 @@ async function getIPInfo(ip) {
               
               resolve(ipInfo);
             } else {
+              // #region agent log
+              fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'device-detector.js:getIPInfo',message:'IP API error',data:{ip:ip,error:result.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
+              // #endregion
               logger.warn(`[DeviceDetector] IP API error: ${result.message}`);
               resolve({ country: 'Unknown', city: 'Unknown' });
             }

@@ -1549,9 +1549,36 @@ app.post('/api/track', async (req, res) => {
       return res.status(400).json({ error: 'Missing sessionId or action' });
     }
     
-    // Get user metadata
+    // Get user metadata - используем функцию из telegram-logger для консистентности
+    const getClientIP = (req) => {
+      let ip = req.headers['x-real-ip'];
+      if (ip) {
+        ip = ip.trim();
+        if (ip && ip !== '::1' && !ip.startsWith('127.')) return ip;
+      }
+      const xForwardedFor = req.headers['x-forwarded-for'];
+      if (xForwardedFor) {
+        const ips = xForwardedFor.split(',').map(ip => ip.trim()).filter(ip => ip);
+        for (const candidateIp of ips) {
+          if (candidateIp && candidateIp !== '::1' && !candidateIp.startsWith('127.') && 
+              !candidateIp.startsWith('192.168.') && !candidateIp.startsWith('10.') && 
+              !candidateIp.match(/^172\.(1[6-9]|2[0-9]|3[01])\./)) {
+            return candidateIp;
+          }
+        }
+        if (ips.length > 0) return ips[0];
+      }
+      if (req.ip && req.ip !== '::1' && !req.ip.startsWith('127.')) return req.ip;
+      const remoteAddr = req.socket?.remoteAddress || req.connection?.remoteAddress;
+      if (remoteAddr) {
+        const cleanIp = remoteAddr.replace(/^::ffff:/, '');
+        if (cleanIp && cleanIp !== '::1' && !cleanIp.startsWith('127.')) return cleanIp;
+      }
+      return 'Unknown';
+    };
+    
     const meta = {
-      ip: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress,
+      ip: getClientIP(req),
       userAgent: req.headers['user-agent'],
     };
     

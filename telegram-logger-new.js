@@ -392,6 +392,79 @@ async function formatTelegramMessage(sessionId, visitorId) {
 }
 
 /**
+ * Получить реальный IP адрес клиента
+ * Приоритет: X-Real-IP > X-Forwarded-For (первый IP) > req.ip > remoteAddress
+ */
+function getClientIP(req) {
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:getClientIP',message:'IP extraction start',data:{xRealIP:req.headers['x-real-ip'],xForwardedFor:req.headers['x-forwarded-for'],reqIP:req.ip,remoteAddress:req.socket?.remoteAddress},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
+  
+  // 1. X-Real-IP - самый надежный, устанавливается Nginx напрямую
+  let ip = req.headers['x-real-ip'];
+  if (ip) {
+    ip = ip.trim();
+    if (ip && ip !== '::1' && !ip.startsWith('127.')) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:getClientIP',message:'IP from X-Real-IP',data:{ip:ip},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      return ip;
+    }
+  }
+  
+  // 2. X-Forwarded-For - может содержать цепочку IP (клиент, прокси1, прокси2)
+  // Берем первый IP (реальный клиент)
+  const xForwardedFor = req.headers['x-forwarded-for'];
+  if (xForwardedFor) {
+    const ips = xForwardedFor.split(',').map(ip => ip.trim()).filter(ip => ip);
+    // Берем первый валидный IP (не локальный)
+    for (const candidateIp of ips) {
+      if (candidateIp && candidateIp !== '::1' && !candidateIp.startsWith('127.') && 
+          !candidateIp.startsWith('192.168.') && !candidateIp.startsWith('10.') && 
+          !candidateIp.match(/^172\.(1[6-9]|2[0-9]|3[01])\./)) {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:getClientIP',message:'IP from X-Forwarded-For',data:{ip:candidateIp,allIPs:ips},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
+        return candidateIp;
+      }
+    }
+    // Если все локальные, вернуть первый
+    if (ips.length > 0) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:getClientIP',message:'IP from X-Forwarded-For (local fallback)',data:{ip:ips[0],allIPs:ips},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      return ips[0];
+    }
+  }
+  
+  // 3. req.ip - может быть установлен Express если trust proxy настроен
+  if (req.ip && req.ip !== '::1' && !req.ip.startsWith('127.')) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:getClientIP',message:'IP from req.ip',data:{ip:req.ip},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
+    return req.ip;
+  }
+  
+  // 4. remoteAddress - последний вариант
+  const remoteAddr = req.socket?.remoteAddress || req.connection?.remoteAddress;
+  if (remoteAddr) {
+    // Убрать IPv6 префикс если есть
+    const cleanIp = remoteAddr.replace(/^::ffff:/, '');
+    if (cleanIp && cleanIp !== '::1' && !cleanIp.startsWith('127.')) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:getClientIP',message:'IP from remoteAddress',data:{ip:cleanIp,original:remoteAddr},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      return cleanIp;
+    }
+  }
+  
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:getClientIP',message:'IP not found, returning Unknown',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+  // #endregion
+  return 'Unknown';
+}
+
+/**
  * Генерировать session ID
  */
 function getSessionId(req) {
@@ -402,7 +475,7 @@ function getSessionId(req) {
     return 'drupal_' + sessionMatch[0].substring(0, 20);
   }
   
-  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const ip = getClientIP(req);
   const ua = (req.headers['user-agent'] || 'unknown').substring(0, 50);
   const hash = Buffer.from(ip + ua).toString('base64').substring(0, 12);
   return 'ip_' + hash;
@@ -573,11 +646,19 @@ async function trackPageRequest(req) {
     }
     
     const sessionId = getSessionId(req);
-    const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
+    const ip = getClientIP(req);
     const userAgent = req.headers['user-agent'] || 'Unknown';
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'Before device info',data:{ip:ip,userAgent:userAgent.substring(0,50)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+    // #endregion
     
     // Получить информацию об устройстве
     const deviceInfo = await deviceDetector.getFullDeviceInfo(ip, userAgent);
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'After device info',data:{ip:ip,country:deviceInfo.country,city:deviceInfo.city,deviceType:deviceInfo.deviceType},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+    // #endregion
     
     // Проверить есть ли активная сессия (до создания посетителя)
     let activeSession = activeSessions.get(sessionId);
@@ -591,13 +672,14 @@ async function trackPageRequest(req) {
       isBot: isBot(userAgent)
     }, isNewSession); // incrementVisit = true только для новой сессии
     
-    // Обновить информацию о стране/городе если есть
-    if (deviceInfo.country && deviceInfo.country !== 'Unknown') {
+    // Обновить информацию о стране/городе если есть (только для реальных IP, не локальных)
+    if (deviceInfo.country && deviceInfo.country !== 'Unknown' && deviceInfo.country !== 'Local') {
       try {
         const dbInstance = db.db();
         if (dbInstance) {
-          dbInstance.prepare('UPDATE visitors SET country = ?, city = ? WHERE id = ?')
-            .run(deviceInfo.country, deviceInfo.city || '', visitorId);
+          // Обновить страну и город, если они еще не установлены или изменились
+          dbInstance.prepare('UPDATE visitors SET country = ?, city = ? WHERE id = ? AND (country IS NULL OR country = ? OR country = ?)')
+            .run(deviceInfo.country, deviceInfo.city || '', visitorId, 'Unknown', 'Local');
         }
       } catch (error) {
         logger.error('[TG] Failed to update visitor country:', error.message);
@@ -688,7 +770,7 @@ async function handleTrackingAPI(req, res) {
     }
     
     const sessionId = getSessionId(req);
-    const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
+    const ip = getClientIP(req);
     
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -724,7 +806,7 @@ async function handleAnalyticsAPI(req, res) {
     }
     
     const sessionId = getSessionId(req);
-    const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || 'Unknown';
+    const ip = getClientIP(req);
     
     let body = '';
     req.on('data', chunk => body += chunk);

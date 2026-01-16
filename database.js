@@ -114,7 +114,7 @@ function createTables() {
 /**
  * Получить или создать посетителя
  */
-function getOrCreateVisitor(ip, userAgent, deviceInfo = {}) {
+function getOrCreateVisitor(ip, userAgent, deviceInfo = {}, incrementVisit = false) {
   if (!db) {
     logger.error('[DB] Database not initialized');
     throw new Error('Database not initialized. Call initDatabase() first.');
@@ -126,24 +126,16 @@ function getOrCreateVisitor(ip, userAgent, deviceInfo = {}) {
   const existing = db.prepare('SELECT * FROM visitors WHERE ip = ?').get(ip);
   
   if (existing) {
-    // Обновить информацию
-    db.prepare(`
-      UPDATE visitors 
-      SET last_seen = ?, 
-          visit_count = visit_count + 1,
-          user_agent = ?,
-          device_type = ?,
-          browser = ?,
-          os = ?
-      WHERE ip = ?
-    `).run(
-      now,
-      userAgent || existing.user_agent,
-      deviceInfo.deviceType || existing.device_type,
-      deviceInfo.browser || existing.browser,
-      deviceInfo.os || existing.os,
-      ip
-    );
+    // Обновить информацию (БЕЗ увеличения visit_count - это делается только при создании новой сессии)
+    const updateQuery = incrementVisit 
+      ? `UPDATE visitors SET last_seen = ?, visit_count = visit_count + 1, user_agent = ?, device_type = ?, browser = ?, os = ? WHERE ip = ?`
+      : `UPDATE visitors SET last_seen = ?, user_agent = ?, device_type = ?, browser = ?, os = ? WHERE ip = ?`;
+    
+    const params = incrementVisit
+      ? [now, userAgent || existing.user_agent, deviceInfo.deviceType || existing.device_type, deviceInfo.browser || existing.browser, deviceInfo.os || existing.os, ip]
+      : [now, userAgent || existing.user_agent, deviceInfo.deviceType || existing.device_type, deviceInfo.browser || existing.browser, deviceInfo.os || existing.os, ip];
+    
+    db.prepare(updateQuery).run(...params);
     
     return existing.id;
   } else {

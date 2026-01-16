@@ -316,11 +316,19 @@ async function formatTelegramMessage(sessionId, visitorId) {
       message += `ОС: <code>${escapeHtml(visitor.os)}</code>\n`;
     }
     // ВАЖНО: Показывать страну если она есть (даже если Local, но не Unknown)
-    if (visitor.country && visitor.country !== 'Unknown') {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:formatTelegramMessage',message:'Checking country in message',data:{visitorId:visitorId,country:visitor.country,countryType:typeof visitor.country,isUnknown:visitor.country === 'Unknown',isNull:visitor.country === null,willShow:visitor.country && visitor.country !== 'Unknown'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'M'})}).catch(()=>{});
+    // #endregion
+    
+    if (visitor.country && visitor.country !== 'Unknown' && visitor.country !== 'null' && visitor.country !== null) {
       message += `Страна: <code>${escapeHtml(visitor.country)}</code>\n`;
-      if (visitor.city && visitor.city !== 'Unknown' && visitor.city !== 'Local' && visitor.city !== '') {
+      if (visitor.city && visitor.city !== 'Unknown' && visitor.city !== 'Local' && visitor.city !== '' && visitor.city !== 'null' && visitor.city !== null) {
         message += `Город: <code>${escapeHtml(visitor.city)}</code>\n`;
       }
+    } else {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:formatTelegramMessage',message:'Country NOT shown in message',data:{visitorId:visitorId,country:visitor.country,countryType:typeof visitor.country,reason:!visitor.country ? 'no country' : visitor.country === 'Unknown' ? 'is Unknown' : visitor.country === 'null' ? 'is null string' : visitor.country === null ? 'is null' : 'other'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'M'})}).catch(()=>{});
+      // #endregion
     }
     
     message += `\n<b>Движение клиента:</b>\n`;
@@ -721,11 +729,15 @@ async function trackPageRequest(req) {
       
       activeSessions.set(sessionId, activeSession);
       
+      // ВАЖНО: Подождать немного, чтобы страна точно обновилась в БД перед отправкой сообщения
+      // Небольшая задержка для гарантии, что UPDATE завершился
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       // Отправить первое сообщение в Telegram (страна уже должна быть обновлена выше)
       const messageText = await formatTelegramMessage(sessionId, visitorId);
       
       // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'Before sending Telegram message',data:{visitorId:visitorId,messageLength:messageText?.length,hasCountry:messageText?.includes('Страна')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
+      fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'Before sending Telegram message',data:{visitorId:visitorId,messageLength:messageText?.length,hasCountry:messageText?.includes('Страна'),messagePreview:messageText?.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
       // #endregion
       
       if (messageText) {
@@ -737,17 +749,29 @@ async function trackPageRequest(req) {
       }
     }
     
-    // Добавить действие "просмотр страницы"
-    const pageName = getPageNameRu(path);
-    await trackEvent(sessionId, {
-      type: 'page_view',
-      path: path,
-      page: pageName
-    }, { ip, userAgent });
-    
-    // Обновить последнюю страницу
-    activeSession.lastPage = path;
-    db.updateSession(sessionId, { lastPage: path });
+    // Добавить действие "просмотр страницы" (только если это не дубликат)
+    // ВАЖНО: Проверяем дубликаты ПЕРЕД добавлением в БД
+    if (activeSession && activeSession.lastPage !== path) {
+      const pageName = getPageNameRu(path);
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'Adding page_view',data:{sessionId:sessionId,path:path,lastPage:activeSession.lastPage,isDuplicate:activeSession.lastPage === path},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'L'})}).catch(()=>{});
+      // #endregion
+      
+      await trackEvent(sessionId, {
+        type: 'page_view',
+        path: path,
+        page: pageName
+      }, { ip, userAgent });
+      
+      // Обновить последнюю страницу
+      activeSession.lastPage = path;
+      db.updateSession(sessionId, { lastPage: path });
+    } else if (activeSession && activeSession.lastPage === path) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'Skipping duplicate page_view',data:{sessionId:sessionId,path:path,lastPage:activeSession.lastPage},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'L'})}).catch(()=>{});
+      // #endregion
+    }
     
   } catch (error) {
     logger.error('[TG] Track request error:', error.message);
@@ -757,9 +781,18 @@ async function trackPageRequest(req) {
 /**
  * Express middleware для отслеживания
  */
+// Защита от множественных вызовов trackPageRequest для одного запроса
+const requestTracking = new Map(); // req.url + IP -> timestamp
+const TRACKING_COOLDOWN = 2000; // 2 секунды между вызовами для одного запроса
+
 function trackingMiddleware(req, res, next) {
   const userAgent = req.headers['user-agent'] || '';
   const path = req.url || req.path || '/';
+  
+  // Пропустить статические файлы
+  if (path.match(/\.(css|js|jpg|jpeg|png|gif|svg|ico|woff|woff2|ttf|eot|webp|mp4|mp3|pdf)$/)) {
+    return next();
+  }
   
   // Пропустить ботов
   if (isBot(userAgent)) {
@@ -776,7 +809,37 @@ function trackingMiddleware(req, res, next) {
     return next();
   }
   
-  trackPageRequest(req).catch(() => {});
+  // Защита от дублирования: проверяем, не вызывали ли мы trackPageRequest недавно для этого запроса
+  const ip = getClientIP(req);
+  const requestKey = `${path}_${ip}`;
+  const lastTrack = requestTracking.get(requestKey);
+  const now = Date.now();
+  
+  if (!lastTrack || (now - lastTrack) > TRACKING_COOLDOWN) {
+    requestTracking.set(requestKey, now);
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackingMiddleware',message:'Calling trackPageRequest',data:{url:path,ip:ip,requestKey:requestKey,lastTrack:lastTrack,timeSinceLastTrack:lastTrack ? now - lastTrack : null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'N'})}).catch(()=>{});
+    // #endregion
+    
+    trackPageRequest(req).catch((err) => {
+      logger.error('[TG] Track page request error:', err.message);
+    });
+  } else {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackingMiddleware',message:'Skipping duplicate trackPageRequest',data:{url:path,ip:ip,requestKey:requestKey,timeSinceLastTrack:now - lastTrack},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'N'})}).catch(()=>{});
+    // #endregion
+  }
+  
+  // Очистка старых записей (каждые 5 минут)
+  if (Math.random() < 0.01) { // 1% вероятность
+    for (const [key, timestamp] of requestTracking.entries()) {
+      if (now - timestamp > 5 * 60 * 1000) {
+        requestTracking.delete(key);
+      }
+    }
+  }
+  
   next();
 }
 

@@ -280,6 +280,10 @@ async function formatTelegramMessage(sessionId, visitorId) {
     const session = db.getSession(sessionId);
     const actions = db.getSessionActions(sessionId);
     
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:formatTelegramMessage',message:'Format message start',data:{visitorId:visitorId,visitorExists:!!visitor,visitorCountry:visitor?.country,visitorCity:visitor?.city},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'K'})}).catch(()=>{});
+    // #endregion
+    
     if (!visitor || !session) {
       return null;
     }
@@ -311,8 +315,12 @@ async function formatTelegramMessage(sessionId, visitorId) {
     if (visitor.os && visitor.os !== 'Unknown') {
       message += `ОС: <code>${escapeHtml(visitor.os)}</code>\n`;
     }
+    // ВАЖНО: Показывать страну если она есть (даже если Local, но не Unknown)
     if (visitor.country && visitor.country !== 'Unknown') {
-      message += `Страна посещения: <code>${escapeHtml(visitor.country)}</code>\n`;
+      message += `Страна: <code>${escapeHtml(visitor.country)}</code>\n`;
+      if (visitor.city && visitor.city !== 'Unknown' && visitor.city !== 'Local' && visitor.city !== '') {
+        message += `Город: <code>${escapeHtml(visitor.city)}</code>\n`;
+      }
     }
     
     message += `\n<b>Движение клиента:</b>\n`;
@@ -673,17 +681,29 @@ async function trackPageRequest(req) {
     }, isNewSession); // incrementVisit = true только для новой сессии
     
     // Обновить информацию о стране/городе если есть (только для реальных IP, не локальных)
+    // ВАЖНО: Обновляем страну ДО отправки сообщения, чтобы она попала в первое уведомление
     if (deviceInfo.country && deviceInfo.country !== 'Unknown' && deviceInfo.country !== 'Local') {
       try {
         const dbInstance = db.db();
         if (dbInstance) {
-          // Обновить страну и город, если они еще не установлены или изменились
-          dbInstance.prepare('UPDATE visitors SET country = ?, city = ? WHERE id = ? AND (country IS NULL OR country = ? OR country = ?)')
-            .run(deviceInfo.country, deviceInfo.city || '', visitorId, 'Unknown', 'Local');
+          // Обновить страну и город (всегда, если есть валидная страна)
+          const updateResult = dbInstance.prepare('UPDATE visitors SET country = ?, city = ? WHERE id = ?')
+            .run(deviceInfo.country, deviceInfo.city || '', visitorId);
+          
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'Country updated in DB',data:{visitorId:visitorId,country:deviceInfo.country,city:deviceInfo.city,changes:updateResult.changes},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+          // #endregion
         }
       } catch (error) {
         logger.error('[TG] Failed to update visitor country:', error.message);
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'Country update error',data:{error:error.message,visitorId:visitorId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+        // #endregion
       }
+    } else {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'Country not updated - invalid',data:{country:deviceInfo.country,ip:ip},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
+      // #endregion
     }
     
     if (!activeSession) {
@@ -701,8 +721,13 @@ async function trackPageRequest(req) {
       
       activeSessions.set(sessionId, activeSession);
       
-      // Отправить первое сообщение в Telegram
+      // Отправить первое сообщение в Telegram (страна уже должна быть обновлена выше)
       const messageText = await formatTelegramMessage(sessionId, visitorId);
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:trackPageRequest',message:'Before sending Telegram message',data:{visitorId:visitorId,messageLength:messageText?.length,hasCountry:messageText?.includes('Страна')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
+      // #endregion
+      
       if (messageText) {
         const result = await sendTelegramMessage(messageText);
         if (result && result.message_id) {

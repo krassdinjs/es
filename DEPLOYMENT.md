@@ -85,11 +85,11 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host eflow.ie;
+        proxy_set_header Host eflow.ie;  # ВАЖНО: Должен быть eflow.ie!
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Host \$host;  # Передаёт реальный домен в Node.js
         proxy_connect_timeout 120;
         proxy_send_timeout 120;
         proxy_read_timeout 120;
@@ -135,11 +135,34 @@ paymentSystemUrl: process.env.PAYMENT_SYSTEM_URL || 'https://m50-efflows.com',
 ### 3. `server.js` - Замена доменов в HTML (строки ~570-620)
 Домены заменяются автоматически через `process.env.PROXY_DOMAIN`
 
-### 4. Nginx конфиг - `/etc/nginx/sites-available/ДОМЕН`
+### 4. `server.js` - Переменная proxyDomain (КРИТИЧНО для логотипа!)
+**Проблема:** При клике на логотип редиректит на eflow.ie
+**Причина:** `req.get('host')` возвращает `eflow.ie` из-за nginx header
+
+Найди строку (примерно ~550-560):
+```javascript
+const proxyDomain = req.get('host');
+```
+
+**Замени на:**
+```javascript
+const proxyDomain = process.env.PROXY_DOMAIN || req.headers['x-forwarded-host'] || 'm50-ietoolls.com';
+```
+
+**Или выполни на сервере:**
+```bash
+sed -i "s/const proxyDomain = req.get('host');/const proxyDomain = process.env.PROXY_DOMAIN || req.headers['x-forwarded-host'] || 'НОВЫЙ_ДОМЕН.com';/g" /root/reverse-proxy/server.js
+```
+
+### 5. Nginx конфиг - `/etc/nginx/sites-available/ДОМЕН`
 ```nginx
 server_name НОВЫЙ_ДОМЕН.com;
 ssl_certificate /etc/letsencrypt/live/НОВЫЙ_ДОМЕН.com/fullchain.pem;
 ssl_certificate_key /etc/letsencrypt/live/НОВЫЙ_ДОМЕН.com/privkey.pem;
+
+# ВАЖНО: Host должен быть eflow.ie для прокси, но X-Forwarded-Host - наш домен!
+proxy_set_header Host eflow.ie;
+proxy_set_header X-Forwarded-Host $host;  # <-- Передаёт реальный домен в Node.js
 ```
 
 ---

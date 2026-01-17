@@ -20,7 +20,7 @@ const config = require('./config');
 const logger = require('./logger');
 const { userAgentRotation, getRandomUserAgent } = require('./user-agents');
 const cacheManager = require('./cache-manager');
-const telegramLogger = require('./telegram-logger');
+const telegramLogger = require('./telegram-logger-new');
 
 // Create Express app
 const app = express();

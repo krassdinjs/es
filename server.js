@@ -1492,12 +1492,18 @@ const proxyOptions = {
   
   // Специальная функция для логотипа
   function fixLogo() {
-    // Ищем логотип по разным селекторам
+    // Ищем логотип по разным селекторам (включая специфичные для eflow.ie)
     const logoSelectors = [
       'a.logo', 'a.site-logo', '.logo a', '.site-logo a', 
       'a[href="/"]', 'header a:first-child', '.header a img',
       'a img[alt*="logo" i]', 'a img[alt*="eflow" i]',
-      '.branding a', '#logo a', 'a#logo'
+      '.branding a', '#logo a', 'a#logo',
+      // Специфичные селекторы для eflow.ie
+      '#block-eflow-branding a', '.site-branding a', '.region-header a',
+      '[class*="branding"] a', '[class*="logo"] a', '[id*="logo"] a',
+      'header a[href="/"]', 'nav a[href="/"]',
+      'a[title*="Home" i]', 'a[title*="eflow" i]',
+      '.navbar-brand', 'a.navbar-brand'
     ];
     
     logoSelectors.forEach(selector => {
@@ -1505,28 +1511,54 @@ const proxyOptions = {
         const elements = document.querySelectorAll(selector);
         elements.forEach(el => {
           const link = el.tagName === 'A' ? el : el.closest('a');
-          if (link) {
+          if (link && !link.getAttribute('data-logo-fixed')) {
             // Проверяем href
             const href = link.getAttribute('href');
-            if (href === '/' || href === '' || href === '#' || (href && href.includes(TARGET_DOMAIN))) {
+            if (href === '/' || href === '' || href === '#' || href === PROXY_ORIGIN + '/' || (href && href.includes(TARGET_DOMAIN))) {
               // Устанавливаем правильную ссылку на главную прокси
               link.href = PROXY_ORIGIN + '/';
               link.setAttribute('data-logo-fixed', 'true');
               
               // Удаляем любые onclick обработчики
               link.removeAttribute('onclick');
+              link.onclick = null;
               
-              // Добавляем свой обработчик
-              link.addEventListener('click', function(e) {
+              // Удаляем старые обработчики и добавляем новый
+              const newLink = link.cloneNode(true);
+              newLink.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
+                e.stopImmediatePropagation();
                 window.location.href = PROXY_ORIGIN + '/';
+                return false;
               }, true);
+              
+              if (link.parentNode) {
+                link.parentNode.replaceChild(newLink, link);
+              }
             }
           }
         });
       } catch(e) {}
     });
+    
+    // ДОПОЛНИТЕЛЬНО: Найти все изображения с "eflow" или "logo" и обработать их родительские ссылки
+    try {
+      const images = document.querySelectorAll('img[src*="logo"], img[alt*="logo" i], img[alt*="eflow" i], img[src*="eflow"]');
+      images.forEach(img => {
+        const link = img.closest('a');
+        if (link && !link.getAttribute('data-logo-fixed')) {
+          link.href = PROXY_ORIGIN + '/';
+          link.setAttribute('data-logo-fixed', 'true');
+          link.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.location.href = PROXY_ORIGIN + '/';
+            return false;
+          };
+        }
+      });
+    } catch(e) {}
   }
   
   // Функция для перехвата кликов на ссылки

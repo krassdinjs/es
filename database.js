@@ -159,7 +159,7 @@ function getOrCreateVisitor(ip, userAgent, deviceInfo = {}, incrementVisit = fal
 }
 
 /**
- * Создать новую сессию
+ * Создать новую сессию (с защитой от дубликатов)
  */
 function createSession(visitorId, sessionId) {
   if (!db) {
@@ -169,12 +169,32 @@ function createSession(visitorId, sessionId) {
   
   const now = Math.floor(Date.now() / 1000);
   
-  const result = db.prepare(`
-    INSERT INTO visitor_sessions (visitor_id, session_id, start_time, page_count, action_count)
-    VALUES (?, ?, ?, 0, 0)
-  `).run(visitorId, sessionId, now);
+  // КРИТИЧНО: Проверить существующую сессию перед созданием
+  const existing = db.prepare('SELECT id FROM visitor_sessions WHERE session_id = ?').get(sessionId);
+  if (existing) {
+    logger.debug(`[DB] Session already exists: ${sessionId}, returning existing ID`);
+    return existing.id;
+  }
   
-  return result.lastInsertRowid;
+  try {
+    const result = db.prepare(`
+      INSERT INTO visitor_sessions (visitor_id, session_id, start_time, page_count, action_count)
+      VALUES (?, ?, ?, 0, 0)
+    `).run(visitorId, sessionId, now);
+    
+    return result.lastInsertRowid;
+  } catch (err) {
+    // Если UNIQUE constraint - вернуть существующую сессию
+    if (err.message && err.message.includes('UNIQUE constraint failed')) {
+      const existingAfterError = db.prepare('SELECT id FROM visitor_sessions WHERE session_id = ?').get(sessionId);
+      if (existingAfterError) {
+        logger.debug(`[DB] Session created by concurrent request: ${sessionId}`);
+        return existingAfterError.id;
+      }
+    }
+    logger.error(`[DB] Failed to create session: ${err.message}`);
+    throw err;
+  }
 }
 
 /**

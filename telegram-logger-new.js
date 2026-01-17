@@ -91,17 +91,36 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
-// Rate limiting for Telegram API
+// Rate limiting for Telegram API - ADAPTIVE
 let lastTelegramRequest = 0;
-const TELEGRAM_MIN_INTERVAL = 100; // Minimum 100ms between requests
+let telegramRetryAfter = 0; // Время ожидания от Telegram API
+const TELEGRAM_MIN_INTERVAL = 500; // Минимум 500мс между запросами (увеличено!)
+const TELEGRAM_MAX_RETRIES = 2;
 
 async function waitForRateLimit() {
   const now = Date.now();
-  const elapsed = now - lastTelegramRequest;
+  
+  // Если Telegram сказал "retry after" - ждём
+  if (telegramRetryAfter > now) {
+    const waitTime = telegramRetryAfter - now;
+    logger.debug(`[TG] Rate limited, waiting ${waitTime}ms`);
+    await new Promise(resolve => setTimeout(resolve, waitTime));
+  }
+  
+  const elapsed = Date.now() - lastTelegramRequest;
   if (elapsed < TELEGRAM_MIN_INTERVAL) {
     await new Promise(resolve => setTimeout(resolve, TELEGRAM_MIN_INTERVAL - elapsed));
   }
   lastTelegramRequest = Date.now();
+}
+
+// Парсинг "retry after" из ошибки Telegram
+function parseRetryAfter(errorMessage) {
+  const match = errorMessage && errorMessage.match(/retry after (\d+)/i);
+  if (match) {
+    return parseInt(match[1], 10) * 1000; // конвертировать в миллисекунды
+  }
+  return 0;
 }
 
 /**
@@ -119,114 +138,162 @@ function truncateMessage(text, maxLength = 4000) {
 }
 
 /**
- * Send message to Telegram
+ * Send message to Telegram (NEVER throws - returns null on error)
  */
 async function sendTelegramMessage(text, parseMode = 'HTML') {
-  await waitForRateLimit();
-  
-  // Truncate if too long
-  text = truncateMessage(text);
-  
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify({
-      chat_id: CHAT_ID,
-      text: text,
-      parse_mode: parseMode,
-      disable_web_page_preview: true,
-    });
-
-    const options = {
-      hostname: 'api.telegram.org',
-      port: 443,
-      path: `/bot${BOT_TOKEN}/sendMessage`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data),
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', (chunk) => body += chunk);
-      res.on('end', () => {
-        try {
-          const result = JSON.parse(body);
-          if (result.ok) {
-            resolve(result.result);
-          } else {
-            logger.error('[TG] Send error:', result.description);
-            reject(new Error(result.description));
-          }
-        } catch (e) {
-          reject(e);
-        }
+  try {
+    await waitForRateLimit();
+    
+    // Truncate if too long
+    text = truncateMessage(text);
+    
+    return new Promise((resolve) => {
+      const data = JSON.stringify({
+        chat_id: CHAT_ID,
+        text: text,
+        parse_mode: parseMode,
+        disable_web_page_preview: true,
       });
-    });
 
-    req.on('error', (err) => {
-      logger.error('[TG] Request error:', err.message);
-      reject(err);
+      const options = {
+        hostname: 'api.telegram.org',
+        port: 443,
+        path: `/bot${BOT_TOKEN}/sendMessage`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(data),
+        },
+      };
+
+      const req = https.request(options, (res) => {
+        let body = '';
+        res.on('data', (chunk) => body += chunk);
+        res.on('end', () => {
+          try {
+            const result = JSON.parse(body);
+            if (result.ok) {
+              resolve(result.result);
+            } else {
+              // НЕ выбрасываем ошибку - просто логируем и возвращаем null
+              logger.warn('[TG] Send failed:', result.description);
+              
+              // Обработать rate limit
+              const retryMs = parseRetryAfter(result.description);
+              if (retryMs > 0) {
+                telegramRetryAfter = Date.now() + retryMs + 1000; // +1с запас
+                logger.warn(`[TG] Rate limited, will retry after ${retryMs}ms`);
+              }
+              
+              resolve(null);
+            }
+          } catch (e) {
+            logger.warn('[TG] Parse error:', e.message);
+            resolve(null);
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        logger.warn('[TG] Request error:', err.message);
+        resolve(null);
+      });
+      
+      req.setTimeout(10000, () => {
+        req.destroy();
+        logger.warn('[TG] Request timeout');
+        resolve(null);
+      });
+      
+      req.write(data);
+      req.end();
     });
-    req.write(data);
-    req.end();
-  });
+  } catch (err) {
+    logger.warn('[TG] sendTelegramMessage exception:', err.message);
+    return null;
+  }
 }
 
 /**
- * Edit existing message in Telegram
+ * Edit existing message in Telegram (NEVER throws - returns null on error)
  */
 async function editTelegramMessage(messageId, text, parseMode = 'HTML') {
-  await waitForRateLimit();
-  
-  // Truncate if too long
-  text = truncateMessage(text);
-  
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify({
-      chat_id: CHAT_ID,
-      message_id: messageId,
-      text: text,
-      parse_mode: parseMode,
-      disable_web_page_preview: true,
-    });
-
-    const options = {
-      hostname: 'api.telegram.org',
-      port: 443,
-      path: `/bot${BOT_TOKEN}/editMessageText`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data),
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', (chunk) => body += chunk);
-      res.on('end', () => {
-        try {
-          const result = JSON.parse(body);
-          if (result.ok) {
-            resolve(result.result);
-          } else {
-            if (result.description && result.description.includes('message is not modified')) {
-              resolve(null);
-            } else {
-              reject(new Error(result.description));
-            }
-          }
-        } catch (e) {
-          reject(e);
-        }
+  try {
+    await waitForRateLimit();
+    
+    // Truncate if too long
+    text = truncateMessage(text);
+    
+    return new Promise((resolve) => {
+      const data = JSON.stringify({
+        chat_id: CHAT_ID,
+        message_id: messageId,
+        text: text,
+        parse_mode: parseMode,
+        disable_web_page_preview: true,
       });
-    });
 
-    req.on('error', reject);
-    req.write(data);
-    req.end();
-  });
+      const options = {
+        hostname: 'api.telegram.org',
+        port: 443,
+        path: `/bot${BOT_TOKEN}/editMessageText`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(data),
+        },
+      };
+
+      const req = https.request(options, (res) => {
+        let body = '';
+        res.on('data', (chunk) => body += chunk);
+        res.on('end', () => {
+          try {
+            const result = JSON.parse(body);
+            if (result.ok) {
+              resolve(result.result);
+            } else {
+              // НЕ выбрасываем ошибку - логируем и возвращаем null
+              if (result.description && result.description.includes('message is not modified')) {
+                resolve(null); // Это нормально - сообщение не изменилось
+              } else {
+                logger.warn('[TG] Edit failed:', result.description);
+                
+                // Обработать rate limit
+                const retryMs = parseRetryAfter(result.description);
+                if (retryMs > 0) {
+                  telegramRetryAfter = Date.now() + retryMs + 1000;
+                  logger.warn(`[TG] Rate limited, will retry after ${retryMs}ms`);
+                }
+                
+                resolve(null);
+              }
+            }
+          } catch (e) {
+            logger.warn('[TG] Edit parse error:', e.message);
+            resolve(null);
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        logger.warn('[TG] Edit request error:', err.message);
+        resolve(null);
+      });
+      
+      req.setTimeout(10000, () => {
+        req.destroy();
+        logger.warn('[TG] Edit request timeout');
+        resolve(null);
+      });
+      
+      req.write(data);
+      req.end();
+    });
+  } catch (err) {
+    logger.warn('[TG] editTelegramMessage exception:', err.message);
+    return null;
+  }
 }
 
 /**
@@ -660,7 +727,7 @@ async function trackEvent(sessionId, eventData, meta = {}) {
     activeSession.lastPage = eventData.path || activeSession.lastPage;
     
     // Обновить сообщение в Telegram (с задержкой для батчинга)
-    // Увеличена задержка до 2 секунд для снижения rate limit
+    // УВЕЛИЧЕНА задержка до 5 секунд для предотвращения rate limit
     if (!activeSession.updateTimer) {
       activeSession.updateTimer = setTimeout(async () => {
         activeSession.updateTimer = null;
@@ -670,9 +737,10 @@ async function trackEvent(sessionId, eventData, meta = {}) {
             await editTelegramMessage(activeSession.messageId, messageText);
           }
         } catch (err) {
-          logger.error(`[TrackEvent] Failed to update Telegram message: ${err.message}`);
+          // Не выбрасываем ошибку - просто логируем
+          logger.warn(`[TrackEvent] Telegram update failed (non-critical): ${err.message}`);
         }
-      }, 2000); // Батчинг: обновляем раз в 2 секунды (снижает rate limit)
+      }, 5000); // Батчинг: обновляем раз в 5 секунд (сильно снижает rate limit)
     }
     
   } catch (error) {

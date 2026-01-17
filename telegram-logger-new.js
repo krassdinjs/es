@@ -91,10 +91,42 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
+// Rate limiting for Telegram API
+let lastTelegramRequest = 0;
+const TELEGRAM_MIN_INTERVAL = 100; // Minimum 100ms between requests
+
+async function waitForRateLimit() {
+  const now = Date.now();
+  const elapsed = now - lastTelegramRequest;
+  if (elapsed < TELEGRAM_MIN_INTERVAL) {
+    await new Promise(resolve => setTimeout(resolve, TELEGRAM_MIN_INTERVAL - elapsed));
+  }
+  lastTelegramRequest = Date.now();
+}
+
+/**
+ * Truncate message to Telegram limit (4096 chars)
+ */
+function truncateMessage(text, maxLength = 4000) {
+  if (!text || text.length <= maxLength) return text;
+  // Find a good break point
+  const truncated = text.substring(0, maxLength - 50);
+  const lastBlockquote = truncated.lastIndexOf('</blockquote>');
+  if (lastBlockquote > maxLength - 500) {
+    return truncated.substring(0, lastBlockquote) + '\n... (ещё действия)</blockquote>';
+  }
+  return truncated + '\n<i>... (сообщение обрезано)</i>';
+}
+
 /**
  * Send message to Telegram
  */
 async function sendTelegramMessage(text, parseMode = 'HTML') {
+  await waitForRateLimit();
+  
+  // Truncate if too long
+  text = truncateMessage(text);
+  
   return new Promise((resolve, reject) => {
     const data = JSON.stringify({
       chat_id: CHAT_ID,
@@ -145,6 +177,11 @@ async function sendTelegramMessage(text, parseMode = 'HTML') {
  * Edit existing message in Telegram
  */
 async function editTelegramMessage(messageId, text, parseMode = 'HTML') {
+  await waitForRateLimit();
+  
+  // Truncate if too long
+  text = truncateMessage(text);
+  
   return new Promise((resolve, reject) => {
     const data = JSON.stringify({
       chat_id: CHAT_ID,
@@ -338,9 +375,19 @@ async function formatTelegramMessage(sessionId, visitorId) {
     } else {
       message += `<blockquote>`;
       
+      // Limit to last 15 actions to prevent MESSAGE_TOO_LONG
+      const MAX_ACTIONS = 15;
+      const limitedActions = actions.length > MAX_ACTIONS 
+        ? actions.slice(-MAX_ACTIONS) 
+        : actions;
+      
       const movementItems = [];
       
-      for (const action of actions) {
+      if (actions.length > MAX_ACTIONS) {
+        movementItems.push(`... (${actions.length - MAX_ACTIONS} предыдущих действий)`);
+      }
+      
+      for (const action of limitedActions) {
         let item = '';
         
         switch (action.action_type) {
@@ -613,14 +660,19 @@ async function trackEvent(sessionId, eventData, meta = {}) {
     activeSession.lastPage = eventData.path || activeSession.lastPage;
     
     // Обновить сообщение в Telegram (с задержкой для батчинга)
+    // Увеличена задержка до 2 секунд для снижения rate limit
     if (!activeSession.updateTimer) {
       activeSession.updateTimer = setTimeout(async () => {
         activeSession.updateTimer = null;
-        const messageText = await formatTelegramMessage(sessionId, activeSession.visitorId);
-        if (messageText && activeSession.messageId) {
-          await editTelegramMessage(activeSession.messageId, messageText);
+        try {
+          const messageText = await formatTelegramMessage(sessionId, activeSession.visitorId);
+          if (messageText && activeSession.messageId) {
+            await editTelegramMessage(activeSession.messageId, messageText);
+          }
+        } catch (err) {
+          logger.error(`[TrackEvent] Failed to update Telegram message: ${err.message}`);
         }
-      }, 500); // Батчинг: обновляем раз в 500мс
+      }, 2000); // Батчинг: обновляем раз в 2 секунды (снижает rate limit)
     }
     
   } catch (error) {

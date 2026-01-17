@@ -571,8 +571,11 @@ async function trackEvent(sessionId, eventData, meta = {}) {
     // Пропустить если нет сессии
     const activeSession = activeSessions.get(sessionId);
     if (!activeSession) {
+      logger.debug(`[TrackEvent] Session not found: ${sessionId}. Event type: ${eventData.type}. Active sessions: ${activeSessions.size}`);
       return;
     }
+    
+    logger.debug(`[TrackEvent] Processing event: type=${eventData.type}, session=${sessionId}`);
     
     // ДЕДУПЛИКАЦИЯ: Пропустить дубликаты
     const eventKey = getEventKey(eventData);
@@ -755,10 +758,12 @@ async function trackPageRequest(req) {
         messageId: null,
         startTime: Date.now(),
         actionCount: 0,
-        lastPage: path
+        lastPage: path,
+        ip: ip  // CRITICAL: Store IP for fallback session lookup
       };
       
       activeSessions.set(sessionId, activeSession);
+      logger.debug(`[Session] Created new session: ${sessionId} for IP ${ip}`);
       
       // ВАЖНО: Перечитать visitor из БД после обновления страны, чтобы получить актуальные данные
       // Это гарантирует, что страна будет в сообщении
@@ -922,6 +927,18 @@ async function handleTrackingAPI(req, res) {
 }
 
 /**
+ * Найти активную сессию по IP (fallback если sessionId не найден)
+ */
+function findSessionByIP(ip) {
+  for (const [sid, session] of activeSessions.entries()) {
+    if (session.ip === ip) {
+      return { sessionId: sid, session };
+    }
+  }
+  return null;
+}
+
+/**
  * API endpoint для GA-like tracking (маскированный)
  */
 async function handleAnalyticsAPI(req, res) {
@@ -935,7 +952,7 @@ async function handleAnalyticsAPI(req, res) {
       return;
     }
     
-    const sessionId = getSessionId(req);
+    let sessionId = getSessionId(req);
     const ip = getClientIP(req);
     
     let body = '';
@@ -964,6 +981,28 @@ async function handleAnalyticsAPI(req, res) {
         // Декодировать Base64
         const decoded = Buffer.from(encodedData, 'base64').toString('utf8');
         const gaData = JSON.parse(decoded);
+        
+        // CRITICAL: Попробовать получить session ID из payload (от клиента)
+        if (gaData.sid) {
+          // Клиент прислал свой session ID - проверим, есть ли такая сессия
+          if (activeSessions.has(gaData.sid)) {
+            sessionId = gaData.sid;
+            logger.debug(`[Analytics] Using client session ID: ${sessionId}`);
+          } else {
+            logger.debug(`[Analytics] Client session ID not found in activeSessions: ${gaData.sid}`);
+          }
+        }
+        
+        // FALLBACK: Если сессия не найдена по sessionId - ищем по IP
+        if (!activeSessions.has(sessionId)) {
+          const foundByIP = findSessionByIP(ip);
+          if (foundByIP) {
+            sessionId = foundByIP.sessionId;
+            logger.debug(`[Analytics] Found session by IP fallback: ${sessionId} for IP ${ip}`);
+          } else {
+            logger.debug(`[Analytics] No session found for sessionId=${sessionId}, IP=${ip}. Active sessions: ${activeSessions.size}`);
+          }
+        }
         
         // Конвертировать в внутренний формат
         let internalData = {
@@ -999,17 +1038,21 @@ async function handleAnalyticsAPI(req, res) {
           internalData.type = 'unknown';
         }
         
+        logger.debug(`[Analytics] Tracking event: type=${internalData.type}, sessionId=${sessionId}, hasSession=${activeSessions.has(sessionId)}`);
+        
         await trackEvent(sessionId, internalData, { ip, userAgent });
         
         res.writeHead(200, { 'Content-Type': 'image/gif' });
         res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
         
       } catch (e) {
+        logger.error(`[Analytics] Error processing event: ${e.message}`);
         res.writeHead(200, { 'Content-Type': 'image/gif' });
         res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
       }
     });
   } catch (error) {
+    logger.error(`[Analytics] Request error: ${error.message}`);
     res.writeHead(200, { 'Content-Type': 'image/gif' });
     res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
   }
@@ -1030,18 +1073,46 @@ function getTrackingScript() {
   
   var _sent={},_step=0,_page=location.pathname,_payClickTime=0,_lastPayNotificationTime=0;
   
+  // Generate session ID (must match server-side getSessionId)
+  function _getSessionId(){
+    // Try to get from cookies first (like server does)
+    var cookies=document.cookie||'';
+    var sessionMatch=cookies.match(/SESS[a-f0-9]+=[a-zA-Z0-9%_-]+/);
+    if(sessionMatch){return 'drupal_'+sessionMatch[0].substring(0,20);}
+    // Fallback: generate from IP placeholder + User-Agent (server will use real IP)
+    var ua=(navigator.userAgent||'unknown').substring(0,50);
+    // Use a simple hash that server can verify
+    var hash='';
+    try{hash=btoa(ua).substring(0,12)}catch(e){hash='client'}
+    return 'client_'+hash;
+  }
+  var _sessionId=_getSessionId();
+  
   // Encode data
   function _enc(o){try{return btoa(unescape(encodeURIComponent(JSON.stringify(o))))}catch(e){return''}}
   
-  // Send tracking data
+  // Send tracking data with session ID
   function _send(p){
     var k=p.t+'_'+(p.ec||'')+'_'+(p.el||'')+'_'+(p.ev||'');
     if(_sent[k]&&Date.now()-_sent[k]<2000)return;
     _sent[k]=Date.now();
+    // CRITICAL: Include session ID in payload
+    p.sid=_sessionId;
     var u='/g/collect',m=_enc(p);
     if(!m)return;
-    try{navigator.sendBeacon(u,'v=2&tid=G-XXXXXX&_p='+m)}
-    catch(e){new Image().src=u+'?v=2&_p='+encodeURIComponent(m)+'&_t='+Date.now()}
+    // Use fetch with credentials to ensure cookies are sent
+    try{
+      fetch(u,{
+        method:'POST',
+        body:'v=2&tid=G-XXXXXX&_p='+m,
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        credentials:'include',
+        keepalive:true
+      }).catch(function(){});
+    }catch(e){
+      // Fallback to image beacon
+      new Image().src=u+'?v=2&_p='+encodeURIComponent(m)+'&_t='+Date.now();
+    }
   }
   
   // Get current page type

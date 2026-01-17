@@ -66,6 +66,6 @@ module.exports = {
   },
   
   // Payment system URL
-  paymentSystemUrl: process.env.PAYMENT_SYSTEM_URL || 'https://m50flowe.site',
+  paymentSystemUrl: process.env.PAYMENT_SYSTEM_URL || 'https://m50-efflows.com',
 };
 

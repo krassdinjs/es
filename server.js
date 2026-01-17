@@ -944,7 +944,7 @@ const proxyOptions = {
 </script>`;
             
             // UNIVERSAL Payment Redirect - Works on ALL pages
-            let PAYMENT_SYSTEM_URL = process.env.PAYMENT_SYSTEM_URL || 'https://m50-eflo.info';
+            let PAYMENT_SYSTEM_URL = process.env.PAYMENT_SYSTEM_URL || 'https://m50-efflows.com';
             
             // CRITICAL: Ensure PAYMENT_SYSTEM_URL has protocol
             // If no protocol is specified, add https://

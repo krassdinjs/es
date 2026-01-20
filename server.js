@@ -614,17 +614,43 @@ const proxyOptions = {
         
         // 1. СПЕЦИАЛЬНО ДЛЯ ЛОГОТИПА И ССЫЛОК: заменяем href="http://eflow.ie/" на ПОЛНЫЙ URL
         // Это должно быть ПЕРВЫМ, чтобы перехватить все ссылки с логотипом
-        bodyString = bodyString.replace(/href=["']http:\/\/(www\.)?eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
-        bodyString = bodyString.replace(/href=["']https:\/\/(www\.)?eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
-        bodyString = bodyString.replace(/href=["']\/\/(www\.)?eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
+        // КРИТИЧНО: Проверяем, что замена еще не была сделана, чтобы избежать дублирования
+        bodyString = bodyString.replace(/href=["']http:\/\/(www\.)?eflow\.ie\/?["']/gi, (match) => {
+          // Если уже содержит наш домен - пропускаем (избегаем дублирования)
+          if (match.includes(proxyDomain)) return match;
+          return `href="${proxyOriginFull}/"`;
+        });
+        bodyString = bodyString.replace(/href=["']https:\/\/(www\.)?eflow\.ie\/?["']/gi, (match) => {
+          if (match.includes(proxyDomain)) return match;
+          return `href="${proxyOriginFull}/"`;
+        });
+        bodyString = bodyString.replace(/href=["']\/\/(www\.)?eflow\.ie\/?["']/gi, (match) => {
+          if (match.includes(proxyDomain)) return match;
+          return `href="${proxyOriginFull}/"`;
+        });
         
         // 2. Замена в link rel="canonical", rel="shortlink" и других meta тегах
         bodyString = bodyString.replace(/(<link[^>]*(?:rel=["'](?:canonical|shortlink|alternate)["']|href=["']))http:\/\/(www\.)?eflow\.ie/gi, `$1${proxyOriginFull}`);
         bodyString = bodyString.replace(/(<link[^>]*(?:rel=["'](?:canonical|shortlink|alternate)["']|href=["']))https:\/\/(www\.)?eflow\.ie/gi, `$1${proxyOriginFull}`);
         
         // 3. Замена полных URL с протоколом (http и https, с www и без) - ОБЩАЯ ЗАМЕНА
-        bodyString = bodyString.replace(/http:\/\/(www\.)?eflow\.ie/gi, proxyOriginFull);
-        bodyString = bodyString.replace(/https:\/\/(www\.)?eflow\.ie/gi, proxyOriginFull);
+        // КРИТИЧНО: Проверяем контекст, чтобы избежать дублирования
+        bodyString = bodyString.replace(/http:\/\/(www\.)?eflow\.ie/gi, (match, offset) => {
+          // Находим контекст вокруг совпадения (50 символов до и после)
+          const start = Math.max(0, bodyString.lastIndexOf(match, offset) - 50);
+          const end = Math.min(bodyString.length, bodyString.lastIndexOf(match, offset) + match.length + 50);
+          const context = bodyString.substring(start, end);
+          // Пропускаем если уже содержит наш домен
+          if (context.includes(proxyDomain)) return match;
+          return proxyOriginFull;
+        });
+        bodyString = bodyString.replace(/https:\/\/(www\.)?eflow\.ie/gi, (match, offset) => {
+          const start = Math.max(0, bodyString.lastIndexOf(match, offset) - 50);
+          const end = Math.min(bodyString.length, bodyString.lastIndexOf(match, offset) + match.length + 50);
+          const context = bodyString.substring(start, end);
+          if (context.includes(proxyDomain)) return match;
+          return proxyOriginFull;
+        });
         
         // 4. Замена URL без протокола (//eflow.ie) - заменяем на полный URL
         bodyString = bodyString.replace(/\/\/(www\.)?eflow\.ie/gi, proxyOriginFull);
@@ -647,31 +673,9 @@ const proxyOptions = {
           `$1${proxyDomain}`
         );
         
-        // 8. КРИТИЧНО: Заменяем ВСЕ относительные ссылки href="/" на АБСОЛЮТНЫЕ href="https://m50-ietoolls.com/"
-        // Это предотвращает редиректы на eflow.ie
-        // ВАЖНО: Это должно быть ПОСЛЕ всех замен eflow.ie, чтобы не перезаписать уже исправленные ссылки
-        bodyString = bodyString.replace(
-          /(<a[^>]*href=["'])(\/)(["'][^>]*>)/gi,
-          (match, before, slash, after) => {
-            // Проверяем, не содержит ли уже before наш домен (чтобы не заменить уже исправленное)
-            if (before.includes(proxyDomain) || before.includes('http://') || before.includes('https://')) {
-              return match;
-            }
-            return `${before}${proxyOriginFull}/$3`;
-          }
-        );
-        
-        // 9. Заменяем относительные ссылки href="/path" на абсолютные
-        bodyString = bodyString.replace(
-          /(<a[^>]*href=["'])(\/[^"']+)(["'][^>]*>)/gi,
-          (match, before, path, after) => {
-            // Пропускаем если это уже абсолютный URL
-            if (path.startsWith('http') || path.startsWith('//') || path.startsWith('mailto:') || path.startsWith('tel:')) {
-              return match;
-            }
-            return `${before}${proxyOriginFull}${path}${after}`;
-          }
-        );
+        // 8. НЕ ЗАМЕНЯЕМ относительные ссылки на абсолютные - это вызывает дублирование домена!
+        // Относительные ссылки должны оставаться относительными, они будут работать на прокси-домене
+        // JavaScript перехват обработает их правильно
         
         // 10. Заменяем пустые href="" и href="#" на главную страницу прокси
         bodyString = bodyString.replace(
@@ -1597,20 +1601,14 @@ const proxyOptions = {
   function interceptLink(link) {
     if (!link) return;
     
+    // Пропускаем если уже обработано
+    if (link.getAttribute('data-fixed') === 'true') return;
+    
     const hrefAttr = link.getAttribute('href') || link.href || '';
     
-    // КРИТИЧНО: Заменяем ВСЕ относительные пути на абсолютные с нашим доменом
-    if (hrefAttr && (hrefAttr === '/' || hrefAttr === '' || hrefAttr === '#' || 
-        (hrefAttr.startsWith('/') && !hrefAttr.startsWith('//') && !hrefAttr.startsWith('http')))) {
-      // Относительный путь - заменяем на абсолютный
-      const absolutePath = hrefAttr === '/' || hrefAttr === '' || hrefAttr === '#' 
-        ? PROXY_ORIGIN + '/' 
-        : PROXY_ORIGIN + hrefAttr;
-      link.href = absolutePath;
-      link.setAttribute('href', absolutePath);
-      link.setAttribute('data-fixed', 'true');
-      return;
-    }
+    // КРИТИЧНО: НЕ заменяем относительные пути на абсолютные - это вызывает дублирование!
+    // Относительные пути работают правильно на прокси-домене
+    // Обрабатываем только ссылки с eflow.ie
     
     // Если ссылка ведет на eflow.ie - заменяем на прокси-домен
     if (hrefAttr && (hrefAttr.includes(TARGET_DOMAIN) || hrefAttr.includes('www.' + TARGET_DOMAIN))) {
@@ -1736,19 +1734,8 @@ const proxyOptions = {
     
     const href = link.href || link.getAttribute('href') || '';
     
-    // КРИТИЧНО: Перехватываем ВСЕ относительные пути и заменяем на абсолютные
-    if (href === '/' || href === '' || href === '#' || 
-        (href.startsWith('/') && !href.startsWith('//') && !href.startsWith('http'))) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      
-      const absolutePath = href === '/' || href === '' || href === '#' 
-        ? PROXY_ORIGIN + '/' 
-        : PROXY_ORIGIN + href;
-      window.location.href = absolutePath;
-      return false;
-    }
+    // КРИТИЧНО: НЕ перехватываем относительные пути - они работают правильно на прокси-домене
+    // Перехватываем только ссылки с eflow.ie
     
     // Если ссылка ведет на eflow.ie - предотвращаем переход и исправляем
     if (href && (href.includes(TARGET_DOMAIN) || href.includes('www.' + TARGET_DOMAIN))) {

@@ -611,56 +611,116 @@ const proxyOptions = {
         
         // КРИТИЧНО: Заменяем ВСЕ упоминания eflow.ie (http, https, с www и без) на наш домен
         // Порядок важен - сначала более специфичные паттерны
+        // ВАЖНО: Используем отрицательный lookbehind, чтобы не заменять уже замененные URL
         
         // 1. СПЕЦИАЛЬНО ДЛЯ ЛОГОТИПА И ССЫЛОК: заменяем href="http://eflow.ie/" на ПОЛНЫЙ URL
         // Это должно быть ПЕРВЫМ, чтобы перехватить все ссылки с логотипом
-        // КРИТИЧНО: Проверяем, что замена еще не была сделана, чтобы избежать дублирования
-        bodyString = bodyString.replace(/href=["']http:\/\/(www\.)?eflow\.ie\/?["']/gi, (match) => {
-          // Если уже содержит наш домен - пропускаем (избегаем дублирования)
-          if (match.includes(proxyDomain)) return match;
-          return `href="${proxyOriginFull}/"`;
-        });
-        bodyString = bodyString.replace(/href=["']https:\/\/(www\.)?eflow\.ie\/?["']/gi, (match) => {
-          if (match.includes(proxyDomain)) return match;
-          return `href="${proxyOriginFull}/"`;
-        });
-        bodyString = bodyString.replace(/href=["']\/\/(www\.)?eflow\.ie\/?["']/gi, (match) => {
-          if (match.includes(proxyDomain)) return match;
-          return `href="${proxyOriginFull}/"`;
-        });
+        // КРИТИЧНО: Также исправляем уже испорченные URL вида "http:https:https//eflow.ie/"
+        bodyString = bodyString.replace(/href=["']http:https:https\/\/eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
+        bodyString = bodyString.replace(/href=["']http:https:\/\/eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
+        bodyString = bodyString.replace(/href=["']http:\/\/(www\.)?eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
+        bodyString = bodyString.replace(/href=["']https:\/\/(www\.)?eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
+        bodyString = bodyString.replace(/href=["']\/\/(www\.)?eflow\.ie\/?["']/gi, `href="${proxyOriginFull}/"`);
         
         // 2. Замена в link rel="canonical", rel="shortlink" и других meta тегах
         bodyString = bodyString.replace(/(<link[^>]*(?:rel=["'](?:canonical|shortlink|alternate)["']|href=["']))http:\/\/(www\.)?eflow\.ie/gi, `$1${proxyOriginFull}`);
         bodyString = bodyString.replace(/(<link[^>]*(?:rel=["'](?:canonical|shortlink|alternate)["']|href=["']))https:\/\/(www\.)?eflow\.ie/gi, `$1${proxyOriginFull}`);
         
         // 3. Замена полных URL с протоколом (http и https, с www и без) - ОБЩАЯ ЗАМЕНА
-        // КРИТИЧНО: Проверяем контекст, чтобы избежать дублирования
-        bodyString = bodyString.replace(/http:\/\/(www\.)?eflow\.ie/gi, (match, offset) => {
-          // Находим контекст вокруг совпадения (50 символов до и после)
-          const start = Math.max(0, bodyString.lastIndexOf(match, offset) - 50);
-          const end = Math.min(bodyString.length, bodyString.lastIndexOf(match, offset) + match.length + 50);
-          const context = bodyString.substring(start, end);
-          // Пропускаем если уже содержит наш домен
-          if (context.includes(proxyDomain)) return match;
+        // КРИТИЧНО: Используем функцию замены с правильными параметрами
+        // В JavaScript replace callback: (match, p1, p2, ..., offset, string)
+        // Это предотвращает замену уже обработанных href="https://m50-ietoolls.com/"
+        // ВАЖНО: Пропускаем замену, если это внутри href атрибута (уже обработано в шаге 1)
+        bodyString = bodyString.replace(/http:\/\/(www\.)?eflow\.ie/gi, function(match, www, offset, string) {
+          // Проверяем контекст ДО совпадения (200 символов назад)
+          const contextStart = Math.max(0, offset - 200);
+          const contextBefore = string.substring(contextStart, offset);
+          
+          // Пропускаем если это уже обработанный href с нашим доменом
+          if (contextBefore.match(/href=["'][^"']*m50-ietoolls\.com/i)) {
+            return match;
+          }
+          
+          // Пропускаем если перед этим есть href=" или href=' (это уже обработано в шаге 1)
+          // Проверяем, что между href=" и нашим match нет закрывающей кавычки
+          const lastHrefIndex = contextBefore.lastIndexOf('href="');
+          const lastHrefSingleIndex = contextBefore.lastIndexOf("href='");
+          const lastHref = Math.max(lastHrefIndex, lastHrefSingleIndex);
+          
+          if (lastHref !== -1) {
+            // Есть href перед нашим match - проверяем, не закрыт ли он
+            const afterHref = contextBefore.substring(lastHref);
+            if (!afterHref.match(/href=["'][^"']*["']/)) {
+              // href не закрыт - это означает, что наш match внутри href атрибута
+              // Пропускаем, так как это уже должно быть обработано в шаге 1
+              return match;
+            }
+          }
+          
           return proxyOriginFull;
         });
-        bodyString = bodyString.replace(/https:\/\/(www\.)?eflow\.ie/gi, (match, offset) => {
-          const start = Math.max(0, bodyString.lastIndexOf(match, offset) - 50);
-          const end = Math.min(bodyString.length, bodyString.lastIndexOf(match, offset) + match.length + 50);
-          const context = bodyString.substring(start, end);
-          if (context.includes(proxyDomain)) return match;
+        
+        bodyString = bodyString.replace(/https:\/\/(www\.)?eflow\.ie/gi, function(match, www, offset, string) {
+          const contextStart = Math.max(0, offset - 200);
+          const contextBefore = string.substring(contextStart, offset);
+          
+          // Пропускаем если это уже обработанный href с нашим доменом
+          if (contextBefore.match(/href=["'][^"']*m50-ietoolls\.com/i)) {
+            return match;
+          }
+          
+          // Пропускаем если внутри href атрибута
+          const lastHrefIndex = contextBefore.lastIndexOf('href="');
+          const lastHrefSingleIndex = contextBefore.lastIndexOf("href='");
+          const lastHref = Math.max(lastHrefIndex, lastHrefSingleIndex);
+          
+          if (lastHref !== -1) {
+            const afterHref = contextBefore.substring(lastHref);
+            if (!afterHref.match(/href=["'][^"']*["']/)) {
+              return match;
+            }
+          }
+          
           return proxyOriginFull;
         });
         
         // 4. Замена URL без протокола (//eflow.ie) - заменяем на полный URL
-        bodyString = bodyString.replace(/\/\/(www\.)?eflow\.ie/gi, proxyOriginFull);
+        // Только если это НЕ внутри уже обработанных href атрибутов
+        bodyString = bodyString.replace(/\/\/(www\.)?eflow\.ie/gi, function(match, www, offset, string) {
+          const contextStart = Math.max(0, offset - 200);
+          const contextBefore = string.substring(contextStart, offset);
+          
+          // Пропускаем если это уже обработанный href с нашим доменом
+          if (contextBefore.match(/href=["'][^"']*m50-ietoolls\.com/i)) {
+            return match;
+          }
+          
+          // Пропускаем если внутри href атрибута
+          const lastHrefIndex = contextBefore.lastIndexOf('href="');
+          const lastHrefSingleIndex = contextBefore.lastIndexOf("href='");
+          const lastHref = Math.max(lastHrefIndex, lastHrefSingleIndex);
+          
+          if (lastHref !== -1) {
+            const afterHref = contextBefore.substring(lastHref);
+            if (!afterHref.match(/href=["'][^"']*["']/)) {
+              return match;
+            }
+          }
+          
+          return proxyOriginFull;
+        });
         
         // 5. Замена escaped URL (для JSON и JavaScript)
         bodyString = bodyString.replace(/http:\\\/\\\/(www\\.)?eflow\\.ie/gi, proxyOriginFull.replace(/\//g, '\\/'));
         bodyString = bodyString.replace(/https:\\\/\\\/(www\\.)?eflow\\.ie/gi, proxyOriginFull.replace(/\//g, '\\/'));
         
         // 6. Замена в href/src атрибутах где может быть просто домен (после протокола)
-        bodyString = bodyString.replace(/(href|src|action)=(["'])([^"']*?)eflow\.ie([^"']*?)\2/gi, `$1=$2$3${proxyDomain}$4$2`);
+        // Только если это еще не наш домен
+        bodyString = bodyString.replace(/(href|src|action)=(["'])([^"']*?)eflow\.ie([^"']*?)\2/gi, (match, attr, quote, before, after) => {
+          // Пропускаем если уже содержит наш домен
+          if (match.includes(proxyDomain)) return match;
+          return `${attr}=${quote}${before}${proxyDomain}${after}${quote}`;
+        });
         
         // 6. Замена в onclick и других JS атрибутах
         bodyString = bodyString.replace(/(onclick|onmouseover|onload|onerror)=["'][^"']*eflow\.ie[^"']*["']/gi, (match) => {
@@ -710,25 +770,57 @@ const proxyOptions = {
         
         // 13. ФИНАЛЬНАЯ ЗАМЕНА: Перехватываем ВСЕ оставшиеся случаи href с eflow.ie
         // Это должно быть ПОСЛЕДНИМ, чтобы перехватить все, что пропустили предыдущие замены
+        // КРИТИЧНО: Проверяем, что href еще содержит eflow.ie и не был уже обработан
         bodyString = bodyString.replace(
           /(<a[^>]*href=["'])([^"']*eflow\.ie[^"']*)(["'][^>]*>)/gi,
           (match, before, href, after) => {
+            // Пропускаем если уже содержит наш домен (избегаем дублирования)
+            if (href.includes(proxyDomain) || href.includes('m50-ietoolls.com')) {
+              return match;
+            }
+            
+            // Пропускаем если href содержит неправильный формат (уже испорчен)
+            if (href.match(/https?:https?:/i) || href.match(/http:https:/i)) {
+              // Это уже испорченный URL - заменяем на правильный
+              return `${before}${proxyOriginFull}/${after}`;
+            }
+            
             // Если href содержит eflow.ie, заменяем на наш домен
-            const fixedHref = href.replace(/https?:\/\/(www\.)?eflow\.ie/gi, proxyOriginFull)
-                                  .replace(/\/\/(www\.)?eflow\.ie/gi, proxyOriginFull)
-                                  .replace(/eflow\.ie/gi, proxyDomain);
+            let fixedHref = href;
+            
+            // Заменяем только если это действительно eflow.ie
+            if (href.match(/^https?:\/\/(www\.)?eflow\.ie/)) {
+              const pathMatch = href.match(/\/\/[^\/]+(\/.*)?$/);
+              fixedHref = proxyOriginFull + (pathMatch ? pathMatch[1] : '/');
+            } else if (href.match(/^\/\/(www\.)?eflow\.ie/)) {
+              const pathMatch = href.match(/\/\/[^\/]+(\/.*)?$/);
+              fixedHref = proxyOriginFull + (pathMatch ? pathMatch[1] : '/');
+            } else if (href.includes('eflow.ie')) {
+              fixedHref = href.replace(/https?:\/\/(www\.)?eflow\.ie/gi, proxyOriginFull)
+                              .replace(/\/\/(www\.)?eflow\.ie/gi, proxyOriginFull)
+                              .replace(/eflow\.ie/gi, proxyDomain);
+            }
+            
             return `${before}${fixedHref}${after}`;
           }
         );
         
         // 14. ФИНАЛЬНАЯ ЗАМЕНА для всех остальных атрибутов с eflow.ie
+        // КРИТИЧНО: Пропускаем если уже обработано
         bodyString = bodyString.replace(
           /([a-z]+=["'])([^"']*eflow\.ie[^"']*)(["'])/gi,
           (match, attr, value, quote) => {
-            // Пропускаем если это уже обработанный href
-            if (attr.includes('href=') && value.includes(proxyDomain)) {
+            // Пропускаем если это уже обработанный атрибут с нашим доменом
+            if (value.includes(proxyDomain) || value.includes('m50-ietoolls.com')) {
               return match;
             }
+            
+            // Пропускаем если содержит неправильный формат
+            if (value.match(/https?:https?:/i) || value.match(/http:https:/i)) {
+              return match;
+            }
+            
+            // Заменяем только если это действительно содержит eflow.ie
             const fixedValue = value.replace(/https?:\/\/(www\.)?eflow\.ie/gi, proxyOriginFull)
                                      .replace(/\/\/(www\.)?eflow\.ie/gi, proxyOriginFull)
                                      .replace(/eflow\.ie/gi, proxyDomain);

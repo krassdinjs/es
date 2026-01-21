@@ -1982,6 +1982,15 @@ const proxyOptions = {
           
           // DEBUG: Add header to confirm injection happened
           res.setHeader('X-Script-Injected', 'yes');
+          
+          // CRITICAL: Prevent Cloudflare and browser caching for HTML pages
+          // This ensures our modifications are always applied
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+          res.setHeader('Surrogate-Control', 'no-store');
+          res.setHeader('CDN-Cache-Control', 'no-store');
+          res.setHeader('Cloudflare-CDN-Cache-Control', 'no-store');
         }
         
         // Return modified body string

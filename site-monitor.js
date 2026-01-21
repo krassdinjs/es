@@ -15,8 +15,8 @@ const CONFIG = {
     chatId: process.env.TELEGRAM_CHAT_ID || '-1003580814172',
     
     // Сайт для мониторинга
-    siteUrl: process.env.PROXY_DOMAIN ? `https://${process.env.PROXY_DOMAIN}` : 'https://m50-ietoolls.com',
-    siteDomain: process.env.PROXY_DOMAIN || 'm50-ietoolls.com',
+    siteUrl: process.env.PROXY_DOMAIN ? `https://${process.env.PROXY_DOMAIN}` : 'https://m50-ietolls.com',
+    siteDomain: process.env.PROXY_DOMAIN || 'm50-ietolls.com',
     
     // Интервал проверки (30 минут = 1800000 мс)
     checkInterval: 30 * 60 * 1000,

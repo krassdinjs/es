@@ -7,6 +7,10 @@
 require('dotenv').config();
 const https = require('https');
 const http = require('http');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+
+// Конфигурация прокси для обхода геоблокировки Cloudflare
+const MONITOR_PROXY_URL = process.env.MONITOR_PROXY_URL || 'http://bpuser-RVrmTCf8:Fzrzq11b8xyojNfWa244_country-IE,DE@residential.bpproxy.at:1000';
 
 // Конфигурация
 const CONFIG = {
@@ -22,7 +26,11 @@ const CONFIG = {
     checkInterval: 30 * 60 * 1000,
     
     // Таймаут запроса (15 секунд)
-    requestTimeout: 15000
+    requestTimeout: 15000,
+    
+    // Использовать прокси для проверки сайта (для обхода геоблокировки)
+    useProxy: true,
+    proxyUrl: MONITOR_PROXY_URL
 };
 
 // ID последнего закреплённого сообщения
@@ -30,25 +38,40 @@ let lastPinnedMessageId = null;
 
 /**
  * Проверка доступности сайта
+ * Использует HTTP прокси для обхода геоблокировки Cloudflare
  */
 async function checkSiteStatus() {
     return new Promise((resolve) => {
         const startTime = Date.now();
-        const url = new URL(CONFIG.siteUrl);
-        const protocol = url.protocol === 'https:' ? https : http;
         
-        const req = protocol.get(CONFIG.siteUrl, {
+        // Настройки запроса
+        const requestOptions = {
             timeout: CONFIG.requestTimeout,
             headers: {
-                'User-Agent': 'SiteMonitor/1.0',
-                'Accept': 'text/html'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5'
             }
-        }, (res) => {
+        };
+        
+        // Добавить прокси агент если включено
+        if (CONFIG.useProxy && CONFIG.proxyUrl) {
+            try {
+                requestOptions.agent = new HttpsProxyAgent(CONFIG.proxyUrl);
+                console.log(`[Monitor] Using proxy: ${CONFIG.proxyUrl.replace(/:[^:@]+@/, ':***@')}`);
+            } catch (proxyError) {
+                console.error(`[Monitor] Failed to create proxy agent: ${proxyError.message}`);
+            }
+        }
+        
+        const req = https.get(CONFIG.siteUrl, requestOptions, (res) => {
             const responseTime = Date.now() - startTime;
             const statusCode = res.statusCode;
             
             // Успешные коды: 200-399
             const isAvailable = statusCode >= 200 && statusCode < 400;
+            
+            console.log(`[Monitor] Site check: ${statusCode} in ${responseTime}ms (proxy: ${CONFIG.useProxy})`);
             
             resolve({
                 available: isAvailable,
@@ -62,6 +85,7 @@ async function checkSiteStatus() {
         });
         
         req.on('error', (error) => {
+            console.error(`[Monitor] Request error: ${error.message}`);
             resolve({
                 available: false,
                 statusCode: null,
@@ -72,6 +96,7 @@ async function checkSiteStatus() {
         
         req.on('timeout', () => {
             req.destroy();
+            console.error(`[Monitor] Request timeout after ${CONFIG.requestTimeout}ms`);
             resolve({
                 available: false,
                 statusCode: null,

@@ -65,13 +65,24 @@ const logger = winston.createLogger({
 logger.logRequest = (req, res, responseTime) => {
   if (!config.logging.logRequests) return;
 
+  // Приоритет: CF-Connecting-IP (Cloudflare) > X-Real-IP > X-Forwarded-For > req.ip
+  const getClientIP = () => {
+    const cfIP = req.headers['cf-connecting-ip'];
+    if (cfIP && cfIP !== '::1' && !cfIP.startsWith('127.')) return cfIP.trim();
+    const realIP = req.headers['x-real-ip'];
+    if (realIP && realIP !== '::1' && !realIP.startsWith('127.')) return realIP.trim();
+    const xff = req.headers['x-forwarded-for'];
+    if (xff) return xff.split(',')[0].trim();
+    return req.ip;
+  };
+
   const logData = {
     method: req.method,
     url: req.url,
     statusCode: res.statusCode,
     responseTime: `${responseTime}ms`,
     userAgent: req.get('user-agent'),
-    ip: req.ip,
+    ip: getClientIP(),
     referer: req.get('referer') || '-',
   };
 

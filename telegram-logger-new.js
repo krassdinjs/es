@@ -605,14 +605,19 @@ async function formatTelegramMessage(sessionId, visitorId) {
 
 /**
  * Получить реальный IP адрес клиента
- * Приоритет: X-Real-IP > X-Forwarded-For (первый IP) > req.ip > remoteAddress
+ * Приоритет: CF-Connecting-IP (Cloudflare) > X-Real-IP > X-Forwarded-For (первый IP) > req.ip > remoteAddress
  */
 function getClientIP(req) {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/9c6f37bb-c9a1-491e-95d3-10def06c3fda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'telegram-logger-new.js:getClientIP',message:'IP extraction start',data:{xRealIP:req.headers['x-real-ip'],xForwardedFor:req.headers['x-forwarded-for'],reqIP:req.ip,remoteAddress:req.socket?.remoteAddress},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
+  // 1. CF-Connecting-IP - CLOUDFLARE! Самый надежный когда сайт за Cloudflare
+  let cfIP = req.headers['cf-connecting-ip'];
+  if (cfIP) {
+    cfIP = cfIP.trim();
+    if (cfIP && cfIP !== '::1' && !cfIP.startsWith('127.')) {
+      return cfIP;
+    }
+  }
   
-  // 1. X-Real-IP - самый надежный, устанавливается Nginx напрямую
+  // 2. X-Real-IP - устанавливается Nginx напрямую
   let ip = req.headers['x-real-ip'];
   if (ip) {
     ip = ip.trim();

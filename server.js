@@ -1882,6 +1882,13 @@ app.post('/api/track', async (req, res) => {
     
     // Get user metadata - используем функцию из telegram-logger для консистентности
     const getClientIP = (req) => {
+      // 1. CF-Connecting-IP - CLOUDFLARE! Самый надежный когда сайт за Cloudflare
+      let cfIP = req.headers['cf-connecting-ip'];
+      if (cfIP) {
+        cfIP = cfIP.trim();
+        if (cfIP && cfIP !== '::1' && !cfIP.startsWith('127.')) return cfIP;
+      }
+      // 2. X-Real-IP
       let ip = req.headers['x-real-ip'];
       if (ip) {
         ip = ip.trim();

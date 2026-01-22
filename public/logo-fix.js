@@ -37,6 +37,7 @@
   
   /**
    * Функция для определения, является ли элемент логотипом
+   * ТОЛЬКО точные селекторы - НЕ все ссылки!
    */
   function isLogoElement(element) {
     if (!element) return false;
@@ -45,30 +46,20 @@
     const link = element.closest('a');
     if (!link) return false;
     
-    // Проверить по атрибутам
+    // ТОЧНЫЕ проверки - только реальный логотип
     if (link.getAttribute('rel') === 'home') return true;
-    if (link.getAttribute('title')?.toLowerCase() === 'home') return true;
     if (link.classList.contains('site-logo')) return true;
-    if (link.classList.contains('navbar-brand')) return true;
-    if (link.classList.contains('logo')) return true;
     
-    // Проверить по содержимому
+    // Проверить по img внутри
     const img = link.querySelector('img');
     if (img) {
       const alt = (img.alt || '').toLowerCase();
       const src = (img.src || '').toLowerCase();
-      if (alt === 'home' || alt.includes('logo')) return true;
-      if (src.includes('logo')) return true;
+      // Только если img имеет alt="Home" или src содержит logo файл
+      if (alt === 'home' || src.includes('logo.svg') || src.includes('logo.png') || src.includes('logo-white')) return true;
     }
     
-    // Проверить href - ведёт на главную?
-    const href = link.getAttribute('href') || '';
-    if (href === '/' || href === PROXY_ORIGIN + '/' || href === 'https://' + PROXY_DOMAIN + '/') {
-      // Это ссылка на главную в header или footer
-      const parent = link.closest('header, footer, nav, .header, .footer, .navbar');
-      if (parent) return true;
-    }
-    
+    // НЕ считаем логотипом просто ссылки на "/" в header!
     return false;
   }
   

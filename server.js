@@ -1651,33 +1651,27 @@ const proxyOptions = {
   
   /**
    * КРИТИЧНО: Определить является ли элемент логотипом
-   * НЕ проверяем href - перехватываем по селекторам
+   * ТОЛЬКО точные селекторы - НЕ все ссылки в header!
    */
   function isLogoElement(el) {
     if (!el) return false;
     const link = el.closest ? el.closest('a') : null;
     if (!link) return false;
     
-    // Проверка по атрибутам
+    // ТОЧНЫЕ проверки - только реальный логотип
     if (link.getAttribute('rel') === 'home') return true;
-    if (link.getAttribute('title') === 'Home') return true;
     if (link.classList.contains('site-logo')) return true;
-    if (link.classList.contains('navbar-brand')) return true;
     
-    // Проверка по img
+    // Проверка по img внутри ссылки
     const img = link.querySelector('img');
     if (img) {
       const alt = (img.alt || '').toLowerCase();
       const src = (img.src || '').toLowerCase();
-      if (alt === 'home' || alt.includes('logo') || src.includes('logo')) return true;
+      // Только если img имеет alt="Home" или src содержит "logo"
+      if (alt === 'home' || src.includes('logo.svg') || src.includes('logo.png')) return true;
     }
     
-    // Проверка по родителю
-    const parent = link.closest('header, .header, .site-branding, #branding');
-    if (parent && (link.getAttribute('href') === '/' || link.getAttribute('href') === PROXY_ORIGIN + '/')) {
-      return true;
-    }
-    
+    // НЕ считаем логотипом просто ссылки в header!
     return false;
   }
   

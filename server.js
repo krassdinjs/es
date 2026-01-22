@@ -1676,41 +1676,19 @@ const proxyOptions = {
   }
   
   /**
-   * ГЛАВНЫЙ ОБРАБОТЧИК - агрессивный перехват
+   * Обработчик ТОЛЬКО для ссылок с eflow.ie (НЕ для всех ссылок!)
    */
-  function handleInteraction(e) {
-    // 1. Проверяем логотип (независимо от href)
-    if (isLogoElement(e.target)) {
-      console.log('[LinkInterceptor v3.0] LOGO DETECTED - Type:', e.type);
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      
-      if (e.type === 'touchstart') {
-        e.target._touchStarted = true;
-        return false;
-      }
-      
-      if (e.type === 'touchend' || e.type === 'click') {
-        if (e.type === 'touchend' && !e.target._touchStarted) return false;
-        e.target._touchStarted = false;
-        console.log('[LinkInterceptor v3.0] Navigating to PROXY_ORIGIN');
-        window.location.href = PROXY_ORIGIN + '/';
-        return false;
-      }
-      return false;
-    }
-    
-    // 2. Проверяем ссылки на eflow.ie
+  function handleEflowLinks(e) {
     const link = e.target.closest ? e.target.closest('a') : null;
-    if (!link) return;
+    if (!link) return; // Пропускаем если не ссылка
     
     const href = link.href || link.getAttribute('href') || '';
+    
+    // ТОЛЬКО перехватываем ссылки на eflow.ie
     if (href.includes(TARGET_DOMAIN) || href.includes('www.' + TARGET_DOMAIN)) {
-      console.log('[LinkInterceptor v3.0] eflow.ie link detected:', href);
+      console.log('[LinkInterceptor v3.0] eflow.ie link intercepted:', href);
       e.preventDefault();
       e.stopPropagation();
-      e.stopImmediatePropagation();
       
       const fixedUrl = href.replace(
         new RegExp('(https?://)(www\\.)?' + TARGET_DOMAIN.replace('.', '\\\\.'), 'gi'),
@@ -1719,14 +1697,14 @@ const proxyOptions = {
       window.location.href = fixedUrl;
       return false;
     }
+    // Все остальные ссылки - НЕ ТРОГАЕМ, пусть работают нормально
   }
   
-  // CAPTURE PHASE - перехватываем раньше всех
-  document.addEventListener('click', handleInteraction, { capture: true, passive: false });
-  document.addEventListener('touchstart', handleInteraction, { capture: true, passive: false });
-  document.addEventListener('touchend', handleInteraction, { capture: true, passive: false });
+  // Перехватываем ТОЛЬКО eflow.ie ссылки
+  document.addEventListener('click', handleEflowLinks, true);
+  document.addEventListener('touchend', handleEflowLinks, true);
   
-  console.log('[LinkInterceptor v3.0] Global handlers installed');
+  console.log('[LinkInterceptor v3.0] eflow.ie interceptor installed');
   
   // Legacy support (не критично, но оставляем для совместимости)
   try {

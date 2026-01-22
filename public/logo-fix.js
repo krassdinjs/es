@@ -64,38 +64,31 @@
   }
   
   /**
-   * ГЛАВНЫЙ ОБРАБОТЧИК - перехват ВСЕХ событий на логотипе
+   * Обработчик ТОЛЬКО для логотипа
    */
   function handleLogoInteraction(e) {
+    // ТОЛЬКО для логотипа - не трогаем другие ссылки!
     if (!isLogoElement(e.target)) return;
     
-    console.log('[LogoFix v3.0] Logo interaction detected:', e.type);
+    console.log('[LogoFix v3.0] Logo clicked:', e.type);
     
-    // КРИТИЧНО: Полная блокировка события
     e.preventDefault();
     e.stopPropagation();
-    e.stopImmediatePropagation();
     
-    // Если это touch событие, не делаем навигацию сразу (ждём touchend)
+    // Для touch - ждём touchend
     if (e.type === 'touchstart') {
       e.target._logoTouchStarted = true;
-      return false;
+      return;
     }
     
-    // touchend или click - делаем навигацию
+    // click или touchend - навигация
     if (e.type === 'touchend' || e.type === 'click') {
-      // Проверяем что это реальный тап (а не scroll)
-      if (e.type === 'touchend' && !e.target._logoTouchStarted) {
-        return false;
-      }
+      if (e.type === 'touchend' && !e.target._logoTouchStarted) return;
       e.target._logoTouchStarted = false;
       
       console.log('[LogoFix v3.0] Navigating to:', PROXY_ORIGIN + '/');
       window.location.href = PROXY_ORIGIN + '/';
-      return false;
     }
-    
-    return false;
   }
   
   /**
@@ -192,44 +185,39 @@
   }
   
   /**
-   * Глобальный перехват кликов - ЗАПАСНОЙ вариант
+   * Перехват ТОЛЬКО eflow.ie ссылок (не всех!)
    */
-  function globalClickInterceptor(e) {
+  function eflowLinkInterceptor(e) {
     const link = e.target.closest('a');
-    if (!link) return;
+    if (!link) return; // Не ссылка - пропускаем
     
     const href = link.href || link.getAttribute('href') || '';
     
-    // Перехватываем ВСЕ ссылки ведущие на eflow.ie
+    // ТОЛЬКО ссылки на eflow.ie
     if (href.includes(TARGET_DOMAIN) || href.includes('www.' + TARGET_DOMAIN)) {
-      console.log('[LogoFix v3.0] Intercepted eflow.ie link:', href);
+      console.log('[LogoFix v3.0] eflow.ie link intercepted:', href);
       
       e.preventDefault();
       e.stopPropagation();
-      e.stopImmediatePropagation();
       
-      // Исправляем URL
       const fixedUrl = href.replace(
         new RegExp('(https?://)(www\\.)?' + TARGET_DOMAIN.replace('.', '\\.'), 'gi'),
         PROXY_ORIGIN
       );
       
       window.location.href = fixedUrl;
-      return false;
     }
+    // Все остальные ссылки работают нормально!
   }
   
   /**
-   * Установить глобальные обработчики
+   * Установить перехватчики
    */
   function setupGlobalInterceptors() {
-    // CAPTURE PHASE на document - перехватываем ВСЁ
-    const options = { capture: true, passive: false };
+    document.addEventListener('click', eflowLinkInterceptor, true);
+    document.addEventListener('touchend', eflowLinkInterceptor, true);
     
-    document.addEventListener('click', globalClickInterceptor, options);
-    document.addEventListener('touchend', globalClickInterceptor, options);
-    
-    console.log('[LogoFix v3.0] Global interceptors installed');
+    console.log('[LogoFix v3.0] eflow.ie interceptor installed');
   }
   
   /**
